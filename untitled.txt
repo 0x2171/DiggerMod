@@ -1,0 +1,4572 @@
+local UnityEngine = CS.UnityEngine
+local GUILayout = CS.UnityEngine.GUILayout
+local GUI = CS.UnityEngine.GUI  
+local Rect = CS.UnityEngine.Rect
+local selectionMaterial
+
+local baseFolder = "C:/Building Assistance/"  -- Основная папка мода
+local buildsFolder = baseFolder .. "Builds/"   -- C:/Building Assistance/Builds/
+local bindsFolder = baseFolder .. "Binds/"     -- C:/Building Assistance/Binds/
+
+local gcCooldown = 0
+local gcSteps = 0
+local lastGCRun = 0  -- нужно объявить эту переменную
+local GC_CHECK_INTERVAL = 10  -- интервал проверки в секундах (раз в 10 с)
+local GC_STEP_DELAY = 0.5   -- задержка между шагами в секундах (0.5 с)
+local GC_TOTAL_STEPS = 5       -- всего шагов (5 шагов)
+
+--отрисовка
+local isSelectionVisible = true  -- видимость выделения области
+local isPreviewVisible = true   -- видимость превью постройки
+
+local blockMesh = nil
+local selectionMaterial = nil
+local isMeshInitialized = false
+
+-- Глобальные переменные для объединённого меша
+local combinedMesh = nil
+local previewMeshTransform = CS.UnityEngine.Vector3.zero  -- Текущая позиция меша
+local currentBuildId = nil  -- ID текущей постройки
+local previewMeshRotation = CS.UnityEngine.Quaternion.identity
+local crossMaterial = nil
+local pulseTime = 0.0
+local showMeshWhenRotated = true  -- меш не отображается при повороте
+
+
+--бинды по умолчанию
+awaitingKeyBind = nil
+local placeBlocksKey = CS.UnityEngine.KeyCode.E
+local destBlocksKey = CS.UnityEngine.KeyCode.X
+local firstPosKey = CS.UnityEngine.KeyCode.G
+local secondPosKey = CS.UnityEngine.KeyCode.H
+local teleportKey = CS.UnityEngine.KeyCode.Mouse2  -- щелчок на колесо епта
+local noclipKey = CS.UnityEngine.KeyCode.LeftControl
+local underBlockKey = CS.UnityEngine.KeyCode.RightAlt
+local areaModedKey = CS.UnityEngine.KeyCode.B
+local deleteAreaKey = CS.UnityEngine.KeyCode.None
+local copyAreaKey = CS.UnityEngine.KeyCode.None
+local pasteAreaKey = CS.UnityEngine.KeyCode.None
+local replaceAreaKey = CS.UnityEngine.KeyCode.None
+local fillAreaKey = CS.UnityEngine.KeyCode.None
+local undoActionKey = CS.UnityEngine.KeyCode.None
+local stopProcessKey = CS.UnityEngine.KeyCode.None
+local clearAreaKey = CS.UnityEngine.KeyCode.None
+local rotateLeftKey = CS.UnityEngine.KeyCode.None
+local rotateRightKey = CS.UnityEngine.KeyCode.None
+local drawKey = CS.UnityEngine.KeyCode.None
+
+-- Глобальные переменные для управления частотой вызовов
+local lastBlockActionTime = 0
+local lastDestroyActionTime = 0
+
+-- Целевая частота: 60 вызовов в секунду
+local TARGET_CALLS_PER_SECOND = 60
+-- Интервал между вызовами: ~0.0167 секунды
+local CALL_INTERVAL = 1.5 / TARGET_CALLS_PER_SECOND
+
+isUserControlling = false  -- флаг ручного управления (только для отслеживания действия)
+lastUserHour = currentHour  -- последнее время, установленное пользователем
+autoTimeToggle = false
+local currentHour = Skybox.Hour
+local isProgressing = Skybox.ProgressTime
+local isInitialized = false
+showLogsInChat = false  -- по умолчанию логи в чате выключены
+undoBlocks = nil
+local isDeleteTabOpen = false
+local isReplaceTabOpen = false
+local deleteMode = "all"  -- Возможные значения: "all", "selected_type"
+local replaceMode = "texture" -- Режим замены: "texture" — только текстура, "full" — полностью
+-- Режим: "hold" — удержание для обоих действий, "click" — клик для обоих действий
+local buildDestroyMode = "hold"
+currentUndoIndex = 1
+currentChunkIndex = 1          -- текущий обрабатываемый чанк
+currentBlockIndexInChunk = 1  -- текущий блок внутри чанка
+deleteSpeed = 1         -- скорость удаления, можно менять через слайдер
+undoChunks = nil              -- список чанков для отмены
+isUndoing = false
+
+-- постепенное копирование
+isCopying = false          -- флаг: идёт ли копирование
+isPasteInProgress = false  -- флаг: идёт ли сейчас вставка скопированной области
+copyChunks = nil         -- чанки для копирования
+currentCopyChunkIndex = 1  -- текущий обрабатываемый чанк
+currentBlockInCopyChunk = 1 -- текущий блок внутри чанка
+copySpeed = 50             -- количество копируемых блоков за кадр 
+allPositions = nil         -- глобальный список всех позиций для копирования
+totalCopyPositions = 0   -- общее количество позиций для копирования (кэшируем)
+copyProgressLastUpdate = 0    -- время последнего обновления прогресса (в секундах)
+copyProgressUpdateInterval = 2  -- интервал обновления прогресса (2 секунды)
+isLargeCopy = false           -- флаг: идёт ли копирование большой области
+
+local timeAccumulator = 0
+
+-- прочее
+flyToggle = false
+wasFlyToggle = false
+noclipActive = false
+local noclipToggle = false
+local toggleChangeBlock = false
+local bFog = true  -- текущее состояние тумана   
+speedModifier = speedModifier or 1
+speedToggle = speedToggle or false
+teleportToggle = true
+toggleState = toggleState or false
+
+isPreviewButtonActive = false 
+
+-- строительство
+FirstPos = nil  
+SecondPos = nil  
+AimPos = nil
+isPasteInProgress = false  -- флаг: идёт ли сейчас вставка скопированной области
+currentFillIndex = 1
+undoTimer = 0
+selectAreaMode = selectAreaMode or false 
+placeBlocksMode = placeBlocksMode or false
+destBlocksMode = destBlocksMode or false
+useCopiedBlocks = false
+blocksToDelete = {}         -- список блоков для удаления
+currentDeleteIndex = 1      -- текущий индекс в списке
+isFilling = true
+isReplacing = false
+isDeleting = false
+isPlacing = false
+copied = false
+blocksCountX = blocksCountX or 1
+blocksCountY = blocksCountY or 1
+blocksCountZ = blocksCountZ or 1
+staticSelectionMode = false  -- режим статичной отрисовки
+staticFirstPos = nil       -- запомненная начальная точка
+staticSecondPos = nil      -- запомненная конечная точка
+originalFirstPos = nil     -- изначальная начальная точка (до поворотов)
+originalSecondPos = nil    -- изначальная конечная точка (до поворотов)
+originalRotation = 0       -- изначальный угол поворота (до любых изменений)
+local showBuildPreview = false          -- флаг отображения превью
+local previewBuildData = nil            -- данные превью постройки
+local previewFirstPos = nil           -- начальная точка превью
+local previewSecondPos = nil          -- конечная точка превью
+local undoInterval = 0.05  -- 0.05 секунды между пакетами
+local savedBuilds = {}
+local blocksToReplace = {}
+local blockKindNames = {}
+local blocksToPlace = {}
+local currentReplaceIndex = 1
+local currentRotation = 0
+local isReplacing = false
+local currentPlaceIndex = 1
+local isPlacing = false
+local offset = CS.UnityEngine.Vector3(0, 0, 0)
+local buildData = {
+    source = nil,          -- "clipboard" или "file"
+    blocks = {},           -- данные блоков
+    previewBounds = nil    -- границы для превью (опционально)
+}
+
+-- меню
+showMenu = true
+showSlidersMode = showSlidersMode or false
+showBuildWindow = showBuildWindow or false
+showBuildListWindow = showBuildListWindow or false
+showBodyWindow = showBodyWindow or false
+showBuildListWindow = showBuildListWindow or false
+showBindWindow = showBindWindow or false
+local showBuildList = false
+local uiLanguage = "en" -- текущий язык
+local inputText = "[9f40ff]text"
+menuRect = menuRect or CS.UnityEngine.Rect(10, 40, 250, 150)
+BuildWindowRect = BuildWindowRect or CS.UnityEngine.Rect(300, 40, 250, 400)
+BindWindowRect = BindWindowRect or CS.UnityEngine.Rect(880, 40, 260, 400)
+BodyWindowRect = BodyWindowRect or CS.UnityEngine.Rect(1180, 40, 280, 200)
+BuildListWindowRect = BuildListWindowRect or CS.UnityEngine.Rect(590, 40, 250, 400)
+local scrollPosition = scrollPosition or CS.UnityEngine.Vector2(0, 0)
+local scrollPosition2 = scrollPosition2 or CS.UnityEngine.Vector2(0, 0)
+local scrollPosition3 = scrollPosition3 or CS.UnityEngine.Vector2(0, 0)
+local buttonHeight = 25
+local baseHeight = 110  -- место под кнопки UpdateList, OpenFolder и отступы
+local maxHeight = 600   -- максимальная высота окна
+
+
+local selectedBuildFileName = nil  -- переменная для хранения выбранного файла
+
+-- Инициализация один раз
+local playerCamera = Player.Camera
+local terrainLayerIndex = CS.UnityEngine.LayerMask.NameToLayer("Terrain")
+
+-- мониторинг памяти
+local lastMemoryCheckTime = 0
+local MEMORY_CHECK_INTERVAL = 2  -- интервал проверки в секундах
+
+-- Функция для вывода памяти в чат
+function CheckAndReportMemory()
+    local currentTime = CS.UnityEngine.Time.time
+
+    if currentTime - lastMemoryCheckTime >= MEMORY_CHECK_INTERVAL then
+        local memoryUsageKB = collectgarbage("count")  -- в килобайтах
+        local memoryUsageMB = memoryUsageKB / 1024  -- переводим в мегабайты
+        local formattedMemory = string.format("Память: %.1f МБ", memoryUsageMB)
+
+        -- Определяем цвет в зависимости от потребления памяти
+        local colorCode
+        if memoryUsageMB < 100 then
+            colorCode = "[a3fc95]"  -- зелёный: меньше 100 МБ
+        elseif memoryUsageMB <= 300 then
+            colorCode = "[fcd395]"  -- жёлтый: от 100 до 300 МБ (включительно)
+        else
+            colorCode = "[f54949]"  -- красный: больше 300 МБ
+        end
+
+        LogChatMessage(formattedMemory, colorCode)
+
+        lastMemoryCheckTime = currentTime
+    end
+end
+
+-- Создаём кастомный скин с уникальным именем (только для нужных элементов)
+local customSkins = UnityEngine.GUISkin()
+
+-- Функция инициализации скина с суффиксом 2 (вызываем один раз)
+function initializeSkin2()
+-- 1. Создаём текстуру для фона окна (серый)
+local windowBgTexture2 = createColorTexture2(UnityEngine.Color(0.11, 0.11, 0.11, 1)) 
+local windowBgTexture3 = createColorTexture2(UnityEngine.Color(0.30, 0.30, 0.30, 1))
+local scrollAreaBgTexture = createColorTexture2(UnityEngine.Color(0, 0, 0, 1.0))
+local buttonBgTexture2 = createColorTexture2(UnityEngine.Color(0.20, 0.20, 0.20, 1.0))
+local sliderBgTexture2 = createColorTexture2(UnityEngine.Color(0.23, 0.23, 0.23, 1.0))
+local sliderThumbTexture3 = createColorTexture2(UnityEngine.Color(0.65, 0.56, 1, 1))
+local scrollbarBgTexture = createColorTexture2(UnityEngine.Color(0.25, 0.25, 0.25, 1.0))
+local scrollbarThumbTexture = createColorTexture2(UnityEngine.Color(0.65, 0.56, 1, 1))
+local scrollbarHoverTexture = createColorTexture2(UnityEngine.Color(0.75, 0.66, 1, 1))
+local scrollbarActiveTexture = createColorTexture2(UnityEngine.Color(0.55, 0.46, 0.9, 1))
+
+    -- 4. Настраиваем стиль для окна
+    customSkins.window = UnityEngine.GUIStyle()
+    customSkins.window.normal.background = windowBgTexture2
+    customSkins.window.active.background = windowBgTexture3
+    customSkins.window.padding = UnityEngine.RectOffset(15, 15, 15, 15)  -- отступы внутри окна
+    customSkins.window.margin = UnityEngine.RectOffset(5, 5, 5, 5)    -- внешние отступы
+    customSkins.window.normal.textColor = UnityEngine.Color(0.70, 0.60, 1, 1)
+    customSkins.window.active.textColor = UnityEngine.Color(1, 0.12, 0.12, 1)
+    customSkins.window.fontStyle = UnityEngine.FontStyle.Bold
+    customSkins.window.contentOffset = UnityEngine.Vector2(0, -5)  --отступ сверху
+
+    -- 5. Настраиваем стиль для кнопки
+    customSkins.button = UnityEngine.GUIStyle()
+    customSkins.button.alignment = UnityEngine.TextAnchor.UpperLeft
+    customSkins.button.padding = UnityEngine.RectOffset(5, 5, 5, 5)
+    customSkins.button.normal.background = buttonBgTexture2
+    customSkins.button.hover.background = createGradientTexture(100, 200, UnityEngine.Color(0.50, 0.50, 0.50, 1.0), UnityEngine.Color(0.22, 0.22, 0.22, 1.0))
+    customSkins.button.active.background = createGradientTexture(100, 200, UnityEngine.Color(0.40, 0.40, 0.40, 1.0), UnityEngine.Color(0.22, 0.22, 0.22, 1.0))
+    customSkins.button.fontSize = 12
+    --customSkins.button.alignment = UnityEngine.TextAnchor.MiddleCenter
+    customSkins.button.normal.textColor = UnityEngine.Color(0.8, 0.8, 0.8, 1.0)
+    customSkins.button.fixedHeight = 22
+    customSkins.button.fontStyle = UnityEngine.FontStyle.Bold
+    customSkins.button.hover.textColor = UnityEngine.Color(0.70, 0.70, 0.70, 1.0)
+    customSkins.button.active.textColor = UnityEngine.Color(0.90, 0.90, 0.90, 0.60)  -- ДОБАВИТЬ ЭТУ СТРОКУ: цвет при нажатии
+
+    -- 6. Настраиваем стиль для слайдера (дорожка)
+    customSkins.horizontalSlider = UnityEngine.GUIStyle()
+    customSkins.horizontalSlider.normal.background = sliderBgTexture2
+    customSkins.horizontalSlider.fixedHeight = 8  -- высота дорожки
+    customSkins.horizontalSlider.padding = UnityEngine.RectOffset(0, 0, 0, 0)
+
+    -- 7. Настраиваем стиль для ползунка слайдера
+    customSkins.horizontalSliderThumb = UnityEngine.GUIStyle()
+    customSkins.horizontalSliderThumb.normal.background = createGradientTexture(16, 8, UnityEngine.Color(0.65, 0.56, 1, 1), UnityEngine.Color(0.33, 0, 0.99, 1))
+    customSkins.horizontalSliderThumb.hover.background = createGradientTexture(20, 20, UnityEngine.Color(0.70, 0.60, 1, 1), UnityEngine.Color(0.43, 0, 1, 1))
+    customSkins.horizontalSliderThumb.active.background = createGradientTexture(16,  8, UnityEngine.Color(0.80, 0.80, 0.80, 1),  UnityEngine.Color(0.4, 0.3, 1, 1))
+    customSkins.horizontalSliderThumb.fixedWidth = 25  -- ширина ползунка
+    customSkins.horizontalSliderThumb.fixedHeight = 8 -- высота ползунка
+
+    -- 8. Добавляем базовый стиль для текста
+    customSkins.label = UnityEngine.GUIStyle()
+    customSkins.label.normal.textColor = UnityEngine.Color(1, 1, 1, 1)
+    customSkins.label.fontStyle = UnityEngine.FontStyle.Bold
+    customSkins.label.padding = UnityEngine.RectOffset(0, 0, 1, 0)
+
+    
+-- 9. TextField style
+customSkins.textField = UnityEngine.GUIStyle()
+
+--textures
+local textFieldNormal = createColorTexture2(UnityEngine.Color(0.18, 0.18, 0.18, 1.0))
+local textFieldHover = createColorTexture2(UnityEngine.Color(0.30, 0.30, 0.30, 1.0))
+local textFieldActive = createColorTexture2(UnityEngine.Color(0.20, 0.20, 0.20, 1.0))
+
+--settings
+customSkins.textField.normal.background = textFieldNormal
+customSkins.textField.hover.background = textFieldHover
+customSkins.textField.active.background = textFieldActive
+customSkins.textField.focused.background = textFieldActive
+customSkins.textField.onNormal.background = textFieldNormal
+customSkins.textField.onHover.background = textFieldHover
+customSkins.textField.onActive.background = textFieldActive
+customSkins.textField.onFocused.background = textFieldActive
+customSkins.textField.hover.textColor = UnityEngine.Color(0.08, 0.08, 0.08, 1)
+customSkins.textField.focused.textColor = UnityEngine.Color(0.65, 0.56, 1, 1) -- 
+customSkins.textField.active.textColor = UnityEngine.Color(0.66, 0.62, 0.7, 1.0)
+customSkins.textField.onActive.textColor = UnityEngine.Color(0.25, 0.08, 0.42, 1.0)
+customSkins.textField.normal.textColor = UnityEngine.Color(0.6, 0.6, 0.6, 1)
+customSkins.textField.fontSize = 12
+customSkins.textField.fixedHeight = 22
+customSkins.textField.fontStyle = UnityEngine.FontStyle.Bold
+customSkins.textField.padding = UnityEngine.RectOffset(5, 5, 5, 5)
+customSkins.textField.alignment = UnityEngine.TextAnchor.UpperLeft
+customSkins.textField.wordWrap = false
+customSkins.textField.richText = false
+customSkins.textField.stretchWidth = false  -- отключаем растягивание по ширине
+customSkins.textField.clipping = UnityEngine.TextClipping.Clip  -- обрезаем текст за пределами
+
+-- 10. Настраиваем стиль для Toggle (флажка)
+customSkins.toggle = UnityEngine.GUIStyle()
+customSkins.toggle.normal.background = createColorTexture2(UnityEngine.Color(0.20, 0.20, 0.20, 1.0))  -- фон в обычном состоянии
+customSkins.toggle.hover.background = createColorTexture2(UnityEngine.Color(0.30, 0.30, 0.30, 1.0))  -- светлее при наведении
+customSkins.toggle.active.background = createColorTexture2(UnityEngine.Color(0.40, 0.40, 0.40, 1.0))  -- ещё светлее при нажатии
+customSkins.toggle.onNormal.background = createGradientTexture(20, 20, UnityEngine.Color(0.65, 0.56, 1, 1), UnityEngine.Color(0.33, 0, 0.99, 1))
+customSkins.toggle.onHover.background = createGradientTexture(20, 20, UnityEngine.Color(0.70, 0.60, 1, 1), UnityEngine.Color(0.43, 0, 1, 1))
+customSkins.toggle.onActive.background = createGradientTexture(20, 20, UnityEngine.Color(0.55, 0.46, 0.9, 1), UnityEngine.Color(0.70, 0.60, 0.95, 1))
+
+-- Размеры и отступы
+customSkins.toggle.fixedWidth = 15  -- ширина флажка
+customSkins.toggle.fixedHeight = 15 -- высота флажка
+customSkins.toggle.padding = UnityEngine.RectOffset(0, 0, 0, 0)  -- внутренние отступы
+customSkins.toggle.margin = UnityEngine.RectOffset(0, 0, 0, 0)  -- внешние отступы
+
+customSkins.box = UnityEngine.GUIStyle()
+customSkins.box.normal.background = createGradientTexture(16, 8, UnityEngine.Color(0.65, 0.56, 1, 0.5), UnityEngine.Color(0.33, 0, 0.99, 0.8))
+customSkins.box.padding = UnityEngine.RectOffset(0, 0, 0, 0)
+customSkins.box.margin = UnityEngine.RectOffset(0, 0, 0, 0)
+
+end
+
+function createGradientTexture(width, height, startColor, endColor)
+    local texture = UnityEngine.Texture2D(width, height)
+    local pixels = {}
+    local maxDistance = math.sqrt(width * width + height * height)  -- максимальная длина диагонали
+
+    for y = 0, height - 1 do
+        for x = 0, width - 1 do
+            -- Расстояние от нижнего левого угла (0, height-1) до текущей точки (x, y)
+            local distance = math.sqrt(x * x + (height - 1 - y) * (height - 1 - y))
+            -- Нормализованный коэффициент (0..1)
+            local t = distance / maxDistance
+
+            -- Линейная интерполяция между цветами
+            local color = UnityEngine.Color.Lerp(startColor, endColor, t)
+            pixels[#pixels + 1] = color
+        end
+    end
+
+    texture:SetPixels(pixels)
+    texture:Apply()
+    return texture
+end
+
+-- Вспомогательная функция для создания цветной текстуры с суффиксом 2
+function createColorTexture2(color)
+    local tex2 = UnityEngine.Texture2D(1, 1)
+    tex2:SetPixel(0, 0, color)
+    tex2:Apply()
+    return tex2
+end
+
+
+-- Инициализация начальных значений (выполняется один раз при старте)
+function Awake()
+    ResetWindowPositions()
+end
+
+-- Функция сброса позиций
+function ResetWindowPositions()
+menuRect = CS.UnityEngine.Rect(10, 40, 250, 150)
+BuildWindowRect = CS.UnityEngine.Rect(300, 40, 250, 400)
+BindWindowRect = CS.UnityEngine.Rect(880, 40, 260, 400)
+BodyWindowRect = CS.UnityEngine.Rect(1180, 40, 280, 200)
+BuildListWindowRect = CS.UnityEngine.Rect(590, 40, 250, 400)
+
+    scrollPosition = CS.UnityEngine.Vector2(0, 0)
+    scrollPosition2 = CS.UnityEngine.Vector2(0, 0)
+    scrollPosition3 = CS.UnityEngine.Vector2(0, 0)
+end
+
+function UpdateBuildListWindowHeight()
+    local buttonsCount = #savedBuilds or 0
+    local newHeight = baseHeight + buttonsCount * buttonHeight
+    newHeight = math.min(newHeight, maxHeight)
+
+    BuildListWindowRect = BuildListWindowRect or CS.UnityEngine.Rect(200, 250, 200, 380)
+    BuildListWindowRect.height = newHeight
+end
+
+--функция обертка для чата(реализация логов)
+function LogChatMessage(message, color)
+    if showLogsInChat then
+        Chat:AddMessage(message, color or "[ffffff]")  -- цвет по умолчанию — белый
+    end
+end
+
+local KeyCodeNames = {
+    -- Буквы
+    [CS.UnityEngine.KeyCode.A] = "A",
+    [CS.UnityEngine.KeyCode.B] = "B",
+    [CS.UnityEngine.KeyCode.C] = "C",
+    [CS.UnityEngine.KeyCode.D] = "D",
+    [CS.UnityEngine.KeyCode.E] = "E",
+    [CS.UnityEngine.KeyCode.F] = "F",
+    [CS.UnityEngine.KeyCode.G] = "G",
+    [CS.UnityEngine.KeyCode.H] = "H",
+    [CS.UnityEngine.KeyCode.I] = "I",
+    [CS.UnityEngine.KeyCode.J] = "J",
+    [CS.UnityEngine.KeyCode.K] = "K",
+    [CS.UnityEngine.KeyCode.L] = "L",
+    [CS.UnityEngine.KeyCode.M] = "M",
+    [CS.UnityEngine.KeyCode.N] = "N",
+    [CS.UnityEngine.KeyCode.O] = "O",
+    [CS.UnityEngine.KeyCode.P] = "P",
+    [CS.UnityEngine.KeyCode.Q] = "Q",
+    [CS.UnityEngine.KeyCode.R] = "R",
+    [CS.UnityEngine.KeyCode.S] = "S",
+    [CS.UnityEngine.KeyCode.T] = "T",
+    [CS.UnityEngine.KeyCode.U] = "U",
+    [CS.UnityEngine.KeyCode.V] = "V",
+    [CS.UnityEngine.KeyCode.W] = "W",
+    [CS.UnityEngine.KeyCode.X] = "X",
+    [CS.UnityEngine.KeyCode.Y] = "Y",
+    [CS.UnityEngine.KeyCode.Z] = "Z",
+
+    -- Цифры (основная клавиатура)
+    [CS.UnityEngine.KeyCode.Alpha0] = "0",
+    [CS.UnityEngine.KeyCode.Alpha1] = "1",
+    [CS.UnityEngine.KeyCode.Alpha2] = "2",
+    [CS.UnityEngine.KeyCode.Alpha3] = "3",
+    [CS.UnityEngine.KeyCode.Alpha4] = "4",
+    [CS.UnityEngine.KeyCode.Alpha5] = "5",
+    [CS.UnityEngine.KeyCode.Alpha6] = "6",
+    [CS.UnityEngine.KeyCode.Alpha7] = "7",
+    [CS.UnityEngine.KeyCode.Alpha8] = "8",
+    [CS.UnityEngine.KeyCode.Alpha9] = "9",
+
+    -- Цифровая клавиатура (NumPad)
+    [CS.UnityEngine.KeyCode.Keypad0] = "Num0",
+    [CS.UnityEngine.KeyCode.Keypad1] = "Num1",
+    [CS.UnityEngine.KeyCode.Keypad2] = "Num2",
+    [CS.UnityEngine.KeyCode.Keypad3] = "Num3",
+    [CS.UnityEngine.KeyCode.Keypad4] = "Num4",
+    [CS.UnityEngine.KeyCode.Keypad5] = "Num5",
+    [CS.UnityEngine.KeyCode.Keypad6] = "Num6",
+    [CS.UnityEngine.KeyCode.Keypad7] = "Num7",
+    [CS.UnityEngine.KeyCode.Keypad8] = "Num8",
+    [CS.UnityEngine.KeyCode.Keypad9] = "Num9",
+    [CS.UnityEngine.KeyCode.KeypadEnter] = "NumEnter",
+    [CS.UnityEngine.KeyCode.KeypadPlus] = "Num+",
+    [CS.UnityEngine.KeyCode.KeypadMinus] = "Num-",
+    [CS.UnityEngine.KeyCode.KeypadMultiply] = "Num*",
+    [CS.UnityEngine.KeyCode.KeypadDivide] = "Num/",
+    [CS.UnityEngine.KeyCode.KeypadPeriod] = "Num.",
+    [CS.UnityEngine.KeyCode.KeypadEquals] = "Num=",
+
+    -- Функциональные клавиши
+    [CS.UnityEngine.KeyCode.F1] = "F1",
+    [CS.UnityEngine.KeyCode.F2] = "F2",
+    [CS.UnityEngine.KeyCode.F3] = "F3",
+    [CS.UnityEngine.KeyCode.F4] = "F4",
+    [CS.UnityEngine.KeyCode.F5] = "F5",
+    [CS.UnityEngine.KeyCode.F6] = "F6",
+    [CS.UnityEngine.KeyCode.F7] = "F7",
+    [CS.UnityEngine.KeyCode.F8] = "F8",
+    [CS.UnityEngine.KeyCode.F9] = "F9",
+    [CS.UnityEngine.KeyCode.F10] = "F10",
+    [CS.UnityEngine.KeyCode.F11] = "F11",
+    [CS.UnityEngine.KeyCode.F12] = "F12",
+    [CS.UnityEngine.KeyCode.F13] = "F13",
+    [CS.UnityEngine.KeyCode.F14] = "F14",
+    [CS.UnityEngine.KeyCode.F15] = "F15",
+
+    -- Стрелки
+    [CS.UnityEngine.KeyCode.UpArrow] = "↑",
+    [CS.UnityEngine.KeyCode.DownArrow] = "↓",
+    [CS.UnityEngine.KeyCode.LeftArrow] = "←",
+    [CS.UnityEngine.KeyCode.RightArrow] = "→",
+
+    -- Специальные клавиши
+    [CS.UnityEngine.KeyCode.Space] = "Space",
+    [CS.UnityEngine.KeyCode.Return] = "Enter",
+    [CS.UnityEngine.KeyCode.Escape] = "Esc",
+    [CS.UnityEngine.KeyCode.Tab] = "Tab",
+    [CS.UnityEngine.KeyCode.Backspace] = "BkSpace",
+    [CS.UnityEngine.KeyCode.Delete] = "Delete",
+    [CS.UnityEngine.KeyCode.Insert] = "Insert",
+    [CS.UnityEngine.KeyCode.Home] = "Home",
+    [CS.UnityEngine.KeyCode.End] = "End",
+    [CS.UnityEngine.KeyCode.PageUp] = "PgUp",
+    [CS.UnityEngine.KeyCode.PageDown] = "PgDown",
+    [CS.UnityEngine.KeyCode.Print] = "PrScreen",
+    [CS.UnityEngine.KeyCode.ScrollLock] = "ScLock",
+    [CS.UnityEngine.KeyCode.Pause] = "Pause",
+
+    -- Модификаторы
+    [CS.UnityEngine.KeyCode.LeftShift] = "lShift",
+    [CS.UnityEngine.KeyCode.RightShift] = "rShift",
+    [CS.UnityEngine.KeyCode.LeftControl] = "lCtrl",
+    [CS.UnityEngine.KeyCode.RightControl] = "rCtrl",
+    [CS.UnityEngine.KeyCode.LeftAlt] = "lAlt",
+    [CS.UnityEngine.KeyCode.RightAlt] = "rAlt",
+    [CS.UnityEngine.KeyCode.LeftCommand] = "lCmd",
+    [CS.UnityEngine.KeyCode.RightCommand] = "rCmd",
+
+    -- Дополнительные клавиши
+    [CS.UnityEngine.KeyCode.CapsLock] = "Caps",
+    [CS.UnityEngine.KeyCode.Numlock] = "NumLock",
+    [CS.UnityEngine.KeyCode.SysReq] = "SysRq",
+
+     -- Символы
+    [CS.UnityEngine.KeyCode.Exclaim] = "!",
+    [CS.UnityEngine.KeyCode.Hash] = "#",
+    [CS.UnityEngine.KeyCode.Dollar] = "$",
+    [CS.UnityEngine.KeyCode.Ampersand] = "&",
+    [CS.UnityEngine.KeyCode.Quote] = "'",
+    [CS.UnityEngine.KeyCode.Asterisk] = "*",
+    [CS.UnityEngine.KeyCode.Plus] = "+",
+    [CS.UnityEngine.KeyCode.Minus] = "-",
+    [CS.UnityEngine.KeyCode.Equals] = "=",
+    [CS.UnityEngine.KeyCode.Colon] = ":",
+    [CS.UnityEngine.KeyCode.Semicolon] = ";",
+    [CS.UnityEngine.KeyCode.Less] = "<",
+    [CS.UnityEngine.KeyCode.Greater] = ">",
+    [CS.UnityEngine.KeyCode.Question] = "?",
+    [CS.UnityEngine.KeyCode.At] = "@",
+    [CS.UnityEngine.KeyCode.LeftBracket] = "[",
+    [CS.UnityEngine.KeyCode.Backslash] = "\\",
+    [CS.UnityEngine.KeyCode.RightBracket] = "]",
+    [CS.UnityEngine.KeyCode.Caret] = "^",
+    [CS.UnityEngine.KeyCode.Underscore] = "_",
+    [CS.UnityEngine.KeyCode.BackQuote] = "`",
+    [CS.UnityEngine.KeyCode.Tilde] = "~",
+    [CS.UnityEngine.KeyCode.Pipe] = "|",
+    [CS.UnityEngine.KeyCode.Percent] = "%",
+
+    -- Прочие символы
+    [CS.UnityEngine.KeyCode.Period] = ".",
+    [CS.UnityEngine.KeyCode.Comma] = ",",
+    [CS.UnityEngine.KeyCode.Slash] = "/",
+    [CS.UnityEngine.KeyCode.Colon] = ":",
+    [CS.UnityEngine.KeyCode.Semicolon] = ";",
+
+    -- Клавиши мыши
+    [CS.UnityEngine.KeyCode.Mouse0] = "лкм",
+    [CS.UnityEngine.KeyCode.Mouse1] = "пкм",
+    [CS.UnityEngine.KeyCode.Mouse2] = "скм",
+    [CS.UnityEngine.KeyCode.Mouse3] = "бкм1",
+    [CS.UnityEngine.KeyCode.Mouse4] = "бкм2",
+
+    --не назначено нахуй
+    [CS.UnityEngine.KeyCode.None] = "None",
+}
+
+-- Создаём таблицу: числовой код → объект KeyCode
+local codeToKeyCode = {}
+for keyCodeObj, _ in pairs(KeyCodeNames) do
+    local codeNum = CS.System.Convert.ToInt32(keyCodeObj)
+    codeToKeyCode[codeNum] = keyCodeObj
+end
+
+local eblockkind = {
+    Default = 0,
+    Half = 1,
+    Fence = 2,
+    DiagonalWest = 3,
+    DiagonalEast = 4,
+    DiagonalSouth = 5,
+    DiagonalNorth = 6,
+    StairNorth = 7,
+    StairSouth = 8,
+    StairWest = 9,
+    StairEast = 10,
+    HalfWallNorth = 11,
+    HalfWallSouth = 12,
+    HalfWallEast = 13,
+    HalfWallWest = 14,
+    Quarter = 16,
+    QuarterOnWallEast = 17,
+    QuarterOnWallNorth = 18,
+    QuarterOnWallSouth = 19,
+    QuarterOnWallWest = 20,
+    FenceOnWallSouthNorth = 21,
+    FenceOnWallEastWest = 22,
+    Third = 25,
+    ThirdOnWallEast = 26,
+    ThirdOnWallWest = 27,
+    ThirdOnWallSouth = 28,
+    ThirdOnWallNorth = 29,
+    DiagonalOnWallWestRight = 30,
+    DiagonalOnWallWestLeft = 31,
+    DiagonalOnWallWestTop = 32,
+    DiagonalOnWallWestBottom = 33,
+    DiagonalOnWallEastRight = 34,
+    DiagonalOnWallEastLeft = 35,
+    DiagonalOnWallEastTop = 36,
+    DiagonalOnWallEastBottom = 37,
+    DiagonalOnWallSouthRight = 38,
+    DiagonalOnWallSouthLeft = 39,
+    DiagonalOnWallSouthTop = 40,
+    DiagonalOnWallSouthBottom = 41,
+    DiagonalOnWallNorthRight = 42,
+    DiagonalOnWallNorthLeft = 43,
+    DiagonalOnWallNorthTop = 44,
+    DiagonalOnWallNorthBottom = 45,
+    StairOnWallNorthRight = 46,
+    StairOnWallNorthLeft = 47,
+    StairOnWallNorthTop = 48,
+    StairOnWallNorthBottom = 49,
+    StairOnWallSouthRight = 50,
+    StairOnWallSouthLeft = 51,
+    StairOnWallSouthTop = 52,
+    StairOnWallSouthBottom = 53,
+    StairOnWallWestRight = 54,
+    StairOnWallWestLeft = 55,
+    StairOnWallWestTop = 56,
+    StairOnWallWestBottom = 57,
+    StairOnWallEastRight = 58,
+    StairOnWallEastLeft = 59,
+    StairOnWallEastTop = 60,
+    StairOnWallEastBottom = 61,
+    CornerEast = 62,
+    CornerWest = 63,
+    CornerNorth = 64,
+    CornerSouth = 65,
+    FenceWest = 66,
+    FenceEast = 67,
+    FenceNorth = 68,
+    FenceSouth = 69,
+    EastFenceWest = 70,
+    EastFenceEast = 71,
+    EastFenceNorth = 72,
+    EastFenceSouth = 73,
+    WestFenceWest = 74,
+    WestFenceEast = 75,
+    WestFenceNorth = 76,
+    WestFenceSouth = 77,
+    NorthFenceWest = 78,
+    NorthFenceEast = 79,
+    NorthFenceNorth = 80,
+    NorthFenceSouth = 81,
+    SouthFenceWest = 82,
+    SouthFenceEast = 83,
+    SouthFenceNorth = 84,
+    SouthFenceSouth = 85,
+    CornerStairEast = 86,
+    CornerStairWest = 87,
+    CornerStairSouth = 88,
+    CornerStairNorth = 89,
+    Flip = 128,
+    HalfFlip = 129,
+    DiagonalWestFlip = 131,
+    DiagonalEastFlip = 132,
+    DiagonalSouthFlip = 133,
+    DiagonalNorthFlip = 134,
+    StairNorthFlip = 135,
+    StairSouthFlip = 136,
+    StairWestFlip = 137,
+    StairEastFlip = 138,
+    Unknown139 = 139,
+    Unknown140 = 140,
+    Unknown141 = 141,
+    Unknown142 = 142,
+    QuarterFlip = 144,
+    Unknown145 = 145,
+    Unknown146 = 146,
+    Unknown147 = 147,
+    Unknown148 = 148,
+    ThirdFlip = 153,
+    DiagonalEastFlip2 = 161,
+    DiagonalWestFlip2 = 165,
+    DiagonalNorthFlip2 = 173,
+    Unknown190 = 190,
+    Unknown191 = 191,
+    Unknown192 = 192,
+    Unknown193 = 193,
+    Unknown194 = 194,
+    Unknown195 = 195,
+    Unknown196 = 196,
+    Unknown197 = 197,
+    Unknown205 = 205,
+    Unknown214 = 214,
+    Unknown215 = 215,
+    Unknown216 = 216,
+    Unknown217 = 217,
+}
+
+for name, id in pairs(eblockkind) do
+    blockKindNames[id] = name
+end
+
+local rotateRightMap = {
+    -- Stair
+    [eblockkind.StairNorth] = eblockkind.StairWest, --
+    [eblockkind.StairEast] = eblockkind.StairNorth, --
+    [eblockkind.StairSouth] = eblockkind.StairEast, --
+    [eblockkind.StairWest] = eblockkind.StairSouth, --
+
+    --(не определено)
+
+    [eblockkind.StairOnWallNorthRight] = eblockkind.StairOnWallEastRight,
+    [eblockkind.StairOnWallEastRight] = eblockkind.StairOnWallSouthRight,
+    [eblockkind.StairOnWallSouthRight] = eblockkind.StairOnWallWestRight,
+    [eblockkind.StairOnWallWestRight] = eblockkind.StairOnWallNorthRight,
+    
+    [eblockkind.StairOnWallNorthLeft] = eblockkind.StairOnWallEastLeft,
+    [eblockkind.StairOnWallEastLeft] = eblockkind.StairOnWallSouthLeft,
+    [eblockkind.StairOnWallSouthLeft] = eblockkind.StairOnWallWestLeft,
+    [eblockkind.StairOnWallWestLeft] = eblockkind.StairOnWallNorthLeft,
+
+    [eblockkind.StairOnWallNorthTop] = eblockkind.StairOnWallEastTop,
+    [eblockkind.StairOnWallEastTop] = eblockkind.StairOnWallSouthTop,
+    [eblockkind.StairOnWallSouthTop] = eblockkind.StairOnWallWestTop,
+    [eblockkind.StairOnWallWestTop] = eblockkind.StairOnWallNorthTop,
+
+    [eblockkind.StairOnWallNorthBottom] = eblockkind.StairOnWallEastBottom,
+    [eblockkind.StairOnWallEastBottom] = eblockkind.StairOnWallSouthBottom,
+    [eblockkind.StairOnWallSouthBottom] = eblockkind.StairOnWallWestBottom,
+    [eblockkind.StairOnWallWestBottom] = eblockkind.StairOnWallNorthBottom,
+
+    [eblockkind.StairNorthFlip] = eblockkind.StairWestFlip, -- 
+    [eblockkind.StairEastFlip] = eblockkind.StairNorthFlip, --
+    [eblockkind.StairSouthFlip] = eblockkind.StairEastFlip, --
+    [eblockkind.StairWestFlip] = eblockkind.StairSouthFlip, --
+
+    -- Half Wall
+    [eblockkind.HalfWallNorth] = eblockkind.HalfWallWest, --
+    [eblockkind.HalfWallEast] = eblockkind.HalfWallNorth, --
+    [eblockkind.HalfWallSouth] = eblockkind.HalfWallEast, --
+    [eblockkind.HalfWallWest] = eblockkind.HalfWallSouth, --
+
+    -- Quarter on Wall
+    [eblockkind.QuarterOnWallNorth] = eblockkind.QuarterOnWallWest, --
+    [eblockkind.QuarterOnWallEast] = eblockkind.QuarterOnWallNorth, --
+    [eblockkind.QuarterOnWallSouth] = eblockkind.QuarterOnWallEast, --
+    [eblockkind.QuarterOnWallWest] = eblockkind.QuarterOnWallSouth, --
+
+    -- Third on Wall
+    [eblockkind.ThirdOnWallNorth] = eblockkind.ThirdOnWallEast, 
+    [eblockkind.ThirdOnWallEast] = eblockkind.ThirdOnWallSouth,
+    [eblockkind.ThirdOnWallSouth] = eblockkind.ThirdOnWallWest,
+    [eblockkind.ThirdOnWallWest] = eblockkind.ThirdOnWallNorth,
+
+    -- Diagonal (исправлено)
+    [eblockkind.DiagonalWest] = eblockkind.DiagonalSouth,
+    [eblockkind.DiagonalNorth] = eblockkind.DiagonalWest,
+    [eblockkind.DiagonalEast] = eblockkind.DiagonalNorth,
+    [eblockkind.DiagonalSouth] = eblockkind.DiagonalEast,
+
+    [eblockkind.DiagonalSouthFlip] = eblockkind.DiagonalOnWallWestBottom, --
+    [eblockkind.DiagonalWestFlip] = eblockkind.DiagonalOnWallSouthBottom, --
+    [eblockkind.DiagonalNorthFlip] = eblockkind.DiagonalOnWallEastBottom, --
+    [eblockkind.DiagonalEastFlip] = eblockkind.DiagonalOnWallNorthBottom, --
+
+    -- (исправлено)
+    [eblockkind.DiagonalOnWallWestRight] = eblockkind.DiagonalOnWallNorthRight, --
+    [eblockkind.DiagonalOnWallNorthRight] = eblockkind.DiagonalOnWallEastRight, -- 
+    [eblockkind.DiagonalOnWallEastRight] = eblockkind.DiagonalOnWallSouthRight, --
+    [eblockkind.DiagonalOnWallSouthRight] = eblockkind.DiagonalOnWallWestRight, --
+
+    --(исправлено)
+    [eblockkind.DiagonalOnWallWestLeft] = eblockkind.DiagonalOnWallNorthLeft, --
+    [eblockkind.DiagonalOnWallNorthLeft] = eblockkind.DiagonalOnWallEastLeft, -- 
+    [eblockkind.DiagonalOnWallEastLeft] = eblockkind.DiagonalOnWallSouthLeft, --
+    [eblockkind.DiagonalOnWallSouthLeft] = eblockkind.DiagonalOnWallWestLeft, --
+    --(исправлено)
+    [eblockkind.DiagonalOnWallWestTop] = eblockkind.DiagonalOnWallNorthTop, --
+    [eblockkind.DiagonalOnWallNorthTop] = eblockkind.DiagonalOnWallEastTop, --
+    [eblockkind.DiagonalOnWallEastTop] = eblockkind.DiagonalOnWallSouthTop, --
+    [eblockkind.DiagonalOnWallSouthTop] = eblockkind.DiagonalOnWallWestTop, --
+
+    [eblockkind.DiagonalOnWallWestBottom] = eblockkind.DiagonalOnWallNorthBottom, --
+    [eblockkind.DiagonalOnWallNorthBottom] = eblockkind.DiagonalOnWallEastBottom, --
+    [eblockkind.DiagonalOnWallEastBottom] = eblockkind.DiagonalOnWallSouthBottom, --
+    [eblockkind.DiagonalOnWallSouthBottom] = eblockkind.DiagonalOnWallWestBottom, --
+
+    -- Corner
+    [eblockkind.CornerNorth] = eblockkind.CornerEast, --
+    [eblockkind.CornerEast] = eblockkind.CornerWest, --
+    [eblockkind.CornerSouth] = eblockkind.CornerNorth, --
+    [eblockkind.CornerWest] = eblockkind.CornerSouth, --
+
+    -- Fence
+    [eblockkind.FenceNorth] = eblockkind.FenceSouth, --
+    [eblockkind.FenceEast] = eblockkind.FenceWest, --
+    [eblockkind.FenceSouth] = eblockkind.FenceEast, --
+    [eblockkind.FenceWest] = eblockkind.FenceNorth, --
+
+    [eblockkind.FenceOnWallSouthNorth] = eblockkind.FenceOnWallEastWest,
+    [eblockkind.FenceOnWallEastWest] = eblockkind.FenceOnWallSouthNorth,
+
+    [eblockkind.EastFenceNorth] = eblockkind.SouthFenceSouth, --
+    [eblockkind.EastFenceEast] = eblockkind.SouthFenceWest, --
+    [eblockkind.EastFenceSouth] = eblockkind.SouthFenceNorth, --
+    [eblockkind.EastFenceWest] = eblockkind.SouthFenceEast, --
+
+    [eblockkind.WestFenceNorth] = eblockkind.NorthFenceSouth, --
+    [eblockkind.WestFenceEast] = eblockkind.NorthFenceWest, --
+    [eblockkind.WestFenceSouth] = eblockkind.NorthFenceNorth, --
+    [eblockkind.WestFenceWest] = eblockkind.NorthFenceEast, --
+
+    [eblockkind.NorthFenceNorth] = eblockkind.EastFenceNorth, --
+    [eblockkind.NorthFenceEast] = eblockkind.EastFenceEast, --
+    [eblockkind.NorthFenceSouth] = eblockkind.EastFenceSouth, --
+    [eblockkind.NorthFenceWest] = eblockkind.EastFenceWest, --
+
+    [eblockkind.SouthFenceNorth] = eblockkind.WestFenceNorth, --
+    [eblockkind.SouthFenceEast] = eblockkind.WestFenceEast, --
+    [eblockkind.SouthFenceSouth] = eblockkind.WestFenceSouth, --
+    [eblockkind.SouthFenceWest] = eblockkind.WestFenceWest, --
+
+    -- Corner Stair
+    [eblockkind.CornerStairNorth] = eblockkind.CornerStairWest, --
+    [eblockkind.CornerStairEast] = eblockkind.CornerStairNorth, --
+    [eblockkind.CornerStairSouth] = eblockkind.CornerStairEast, --
+    [eblockkind.CornerStairWest] = eblockkind.CornerStairSouth, --  
+
+    --unknown corners
+    [eblockkind.Unknown191] = eblockkind.Unknown193, --
+    [eblockkind.Unknown190] = eblockkind.Unknown191, --
+    [eblockkind.Unknown192] = eblockkind.Unknown190, --
+    [eblockkind.Unknown193] = eblockkind.Unknown192, --
+
+    --unknown corner stairs
+    [eblockkind.Unknown214] = eblockkind.Unknown217, --
+    [eblockkind.Unknown216] = eblockkind.Unknown214, --
+    [eblockkind.Unknown215] = eblockkind.Unknown216, --
+    [eblockkind.Unknown217] = eblockkind.Unknown215, --
+
+    --unknown quarter
+    [eblockkind.Unknown146] = eblockkind.Unknown148, --
+    [eblockkind.Unknown145] = eblockkind.Unknown146, --
+    [eblockkind.Unknown147] = eblockkind.Unknown145, --
+    [eblockkind.Unknown148] = eblockkind.Unknown147, --
+
+    --unknown half
+    [eblockkind.Unknown139] = eblockkind.Unknown142, --
+    [eblockkind.Unknown140] = eblockkind.Unknown141, --
+    [eblockkind.Unknown142] = eblockkind.Unknown140, --
+    [eblockkind.Unknown141] = eblockkind.Unknown139, --
+
+    --unknown fence
+    [eblockkind.Unknown195] = eblockkind.Unknown194, --
+    [eblockkind.Unknown194] = eblockkind.Unknown196, --
+    [eblockkind.Unknown196] = eblockkind.Unknown197, --
+    [eblockkind.Unknown197] = eblockkind.Unknown195, --
+
+    [eblockkind.Unknown205] = eblockkind.SouthFenceNorth, --
+}
+
+local rotateLeftMap = {}
+for k, v in pairs(rotateRightMap) do
+    rotateLeftMap[v] = k
+end
+
+local function RotateFormRight(form)
+    return rotateRightMap[form] or form
+end
+
+local function RotateFormLeft(form)
+    return rotateLeftMap[form] or form
+end
+
+local function RotateOffsetRight(offset)
+    return CS.UnityEngine.Vector3(offset.z, offset.y, -offset.x)
+end
+
+local function RotateOffsetLeft(offset)
+    return CS.UnityEngine.Vector3(-offset.z, offset.y, offset.x)
+end
+
+function RotateCopiedBlocksRight()
+    if staticSelectionMode then
+        Chat:AddMessage("В статичном режиме поворот отключён.", "[f54949]")
+        return
+    end
+    buildData.source = "clipboard"
+    if not buildData.blocks or #buildData.blocks == 0 then
+        Chat:AddMessage("Сначала скопируй область кнопкой CopyArea", "[f54949]")
+        return
+    end
+
+    -- Переиспользуем существующую таблицу вместо создания новой
+    for i, data in ipairs(buildData.blocks) do
+        buildData.blocks[i].offset = RotateOffsetRight(data.offset)
+        buildData.blocks[i].blockForm = RotateFormRight(data.blockForm)
+    end
+    currentRotation = (currentRotation + 90) % 360
+    Chat:AddMessage("Выделенная область повернута вправо на 90°", "[a455f2]")
+end
+
+function RotateCopiedBlocksLeft()
+    if staticSelectionMode then
+        Chat:AddMessage("В статичном режиме поворот отключён.", "[f54949]")
+        return
+    end
+    buildData.source = "clipboard"
+    if not buildData.blocks or #buildData.blocks == 0 then
+        Chat:AddMessage("Сначала скопируй область кнопкой CopyArea", "[f54949]")
+        return
+    end
+
+   -- Переиспользуем существующую таблицу вместо создания новой
+    for i, data in ipairs(buildData.blocks) do
+        buildData.blocks[i].offset = RotateOffsetLeft(data.offset)
+        buildData.blocks[i].blockForm = RotateFormLeft(data.blockForm)
+    end
+    currentRotation = (currentRotation - 90) % 360
+    Chat:AddMessage("Выделенная область повернута влево на 90°", "[a455f2]")
+end
+
+local function RotatePointAroundY(pos, center, angleDegrees)
+    local rad = math.rad(angleDegrees)
+    local cosA = math.cos(rad)
+    local sinA = math.sin(rad)
+    local x = pos.x - center.x
+    local z = pos.z - center.z
+    local rotatedX = x * cosA - z * sinA
+    local rotatedZ = x * sinA + z * cosA
+    return CS.UnityEngine.Vector3(rotatedX + center.x, pos.y, rotatedZ + center.z)
+end
+
+function Teleport()
+    if not Player.Camera then
+        return false
+    end
+
+    local camera = Player.Camera
+    local centerVec = CS.UnityEngine.Vector3(0.5, 0.5, 0)
+    local ray = camera:ViewportPointToRay(centerVec)
+
+    local hasHit, hit = Physics:Ray(ray, 999)
+
+    if hasHit and hit.point then
+        local blockX = math.floor(hit.point.x)
+        local blockY = math.floor(hit.point.y)
+        local blockZ = math.floor(hit.point.z)
+
+        -- Получаем направление луча (взгляда игрока)
+        local direction = ray.direction
+        direction:Normalize()  -- нормализуем вектор
+
+        -- Сдвигаем позицию на 1 блок *перед* блоком, в который попали
+        local teleportPos = CS.UnityEngine.Vector3(
+            blockX + 0.5 + direction.x,
+            blockY + direction.y,
+            blockZ + 0.5 + direction.z
+        )
+
+        Player.Position = teleportPos
+        return true
+    else
+        return false
+    end
+end
+
+--[[local function ShowBlockFormUnderCrosshair()
+    local camTransform = Player.Camera.transform
+    local rayOrigin = camTransform.position
+    local rayDirection = camTransform.forward
+    local maxDistance = 1000
+
+    local ray = CS.UnityEngine.Ray(rayOrigin, rayDirection)
+    local hits = CS.UnityEngine.Physics.RaycastAll(ray, maxDistance)
+
+    if hits.Length > 0 then
+        local closestHit = hits[0]
+        local minDistance = closestHit.distance
+        for i = 1, hits.Length -1 do
+            if hits[i].distance < minDistance then
+                minDistance = hits[i].distance
+                closestHit = hits[i]
+            end
+        end
+
+        local hitPoint = closestHit.point
+        local blockPos = CS.UnityEngine.Vector3(
+            math.floor(hitPoint.x), 
+            math.floor(hitPoint.y), 
+            math.floor(hitPoint.z)
+        )
+
+        local blockForm = World:GetBlockKind(blockPos)
+        local name = blockKindNames[blockForm] or ("Неизвестная форма (" .. tostring(blockForm) .. ")")
+        Chat:AddMessage("Форма блока: " .. name, "[aa69ff]")
+    else
+        Chat:AddMessage("Объект не найден", "[f54949]")
+    end
+end]]
+
+local function GetAimPoint()
+    -- Проверка камеры
+    if not playerCamera or not playerCamera.transform then
+        return nil
+    end
+
+    local centerVec = CS.UnityEngine.Vector3(0.5, 0.5, 0)
+    local ray = playerCamera:ViewportPointToRay(centerVec)
+    local terrainLayer = CS.UnityEngine.LayerMask.NameToLayer("Terrain")
+
+    local hasHit, hit = Physics:Ray(ray, 999, terrainLayer) 
+
+    if hasHit and hit.point and hit.normal then
+        local normalOffset = hit.normal * 0.1
+        local vecpoint = hit.point - normalOffset
+
+        -- Округление координат
+        return CS.UnityEngine.Vector3(
+            math.floor(vecpoint.x),
+            math.floor(vecpoint.y),
+            math.floor(vecpoint.z)
+        )
+    end
+end
+
+local function AreAllSlidersAboveFive()
+    local count = 0
+    if blocksCountX > 5 then count = count + 1 end
+    if blocksCountY > 5 then count = count + 1 end
+    if blocksCountZ > 5 then count = count + 1 end
+    return count >= 2
+end
+
+function SetBlock()
+    if AreAllSlidersAboveFive() then
+        return
+    end
+
+    if not Player.IsAdmin and not Player.IsModerator then
+        return  -- Выходим, если нет прав
+    end
+
+    local status, err = pcall(function()
+        -- Используем готовую функцию для получения точки прицела
+        local basePos = GetAimPoint()
+
+        if not basePos then
+            return  -- Ничего не попало в луч, прерываем выполнение
+        end
+
+        local desiredBlockType = Player.CurrentBlock
+        local desiredBlockForm = Player.CurrentKind
+
+        -- ПРОВЕРКА: если тип блока равен 0 (воздух), ничего не делаем
+        if desiredBlockType == 0 then
+            -- Убираем вывод сообщения в чат
+            hasShownNoBlockMessage = true
+            return
+        end
+
+        local outOfBoundsCount = 0  -- счётчик блоков за границами
+        local placedCount = 0       -- счётчик установленных блоков
+
+        for x = 0, math.floor(blocksCountX) - 1 do
+            for y = 0, math.floor(blocksCountY) - 1 do
+                for z = 0, math.floor(blocksCountZ) - 1 do
+                    local pos = CS.UnityEngine.Vector3(
+                basePos.x + x,
+                basePos.y + y,
+                basePos.z + z
+            )
+
+            -- Проверка границ карты с использованием готовой функции
+            if IsPositionInBounds(pos) then
+                local currentBlockType = World:GetBlockType(pos)
+                if currentBlockType ~= desiredBlockType then
+                    World:AddBlock(pos, desiredBlockType, desiredBlockForm)
+            placedCount = placedCount + 1
+        end
+    else
+        outOfBoundsCount = outOfBoundsCount + 1
+    end
+end
+end
+end
+end)
+end
+
+function DestroyBlock()
+    if AreAllSlidersAboveFive() then
+        return
+    end
+
+    if not Player.IsAdmin and not Player.IsModerator then
+        return  -- Выходим, если нет прав
+    end
+
+    local status, err = pcall(function()
+        -- Используем готовую функцию для получения точки прицела
+        local basePos = GetAimPoint()
+
+        if not basePos then
+            return  -- Ничего не попало в луч, прерываем выполнение
+        end
+
+        local outOfBoundsCount = 0  -- счётчик блоков за границами
+        local destroyedCount = 0      -- счётчик уничтоженных блоков
+
+
+        for x = 0, math.floor(blocksCountX) - 1 do
+            for y = 0, math.floor(blocksCountY) - 1 do
+                for z = 0, math.floor(blocksCountZ) - 1 do
+                    local pos = CS.UnityEngine.Vector3(
+                basePos.x + x,
+                basePos.y + y,
+                basePos.z + z
+            )
+
+            -- Проверка границ карты с использованием готовой функции
+            if IsPositionInBounds(pos) then
+                local currentBlockType = World:GetBlockType(pos)
+                if currentBlockType ~= 0 then
+                    World:RemoveBlock(pos)
+            destroyedCount = destroyedCount + 1
+        end
+    else
+        outOfBoundsCount = outOfBoundsCount + 1
+    end
+end
+end
+end
+end)
+end
+
+--[[function SetRandomBlockUnderPlayer()
+    if not Player.IsAdmin and not Player.IsModerator then
+        return
+    end
+
+    local status, err = pcall(function()
+        local pos = Player.Position
+        local blockPos = CS.UnityEngine.Vector3(
+            math.floor(pos.x),
+            math.floor(pos.y) - 1,
+            math.floor(pos.z)
+        )
+
+        -- Проверяем, что blockPos внутри границ карты
+        if blockPos.x < 0 or blockPos.x >= World.SizeX then return end
+        if blockPos.y < 0 or blockPos.y >= World.SizeY then return end
+        if blockPos.z < 0 or blockPos.z >= World.SizeZ then return end
+
+        local randomBlockType = math.random(19, 27)
+        local randomBlockForm = 0
+
+        local currentBlockType = World:GetBlockType(blockPos)
+        if currentBlockType ~= randomBlockType then
+            World:AddBlock(blockPos, randomBlockType, randomBlockForm)
+        end
+    end)
+    if not status then
+        -- Обработка ошибки
+    end
+end]]
+
+function SetBlockUnderPlayer()
+    if not Player.IsAdmin and not Player.IsModerator then
+        return  -- Не позволяем выполнять функцию без прав
+    end
+
+    local status, err = pcall(function()
+        local pos = Player.Position
+        local blockPos = CS.UnityEngine.Vector3(
+            math.floor(pos.x),
+            math.floor(pos.y) - 1,
+            math.floor(pos.z)
+        )
+
+        local desiredBlockType = Player.CurrentBlock
+        local desiredBlockForm = Player.CurrentKind
+
+        local currentBlockType = World:GetBlockType(blockPos)
+        if currentBlockType ~= desiredBlockType then
+            World:AddBlock(blockPos, desiredBlockType, desiredBlockForm)
+        end
+    end)
+end
+
+local function getRange(startVal, endVal)
+    local range = {}
+    if startVal <= endVal then
+        for val = startVal, endVal do
+            table.insert(range, val)
+        end
+    else
+        for val = startVal, endVal, -1 do
+            table.insert(range, val)
+        end
+    end
+    return range
+end
+
+-- Основная функция установки точки выделения
+local function SetSelectionPoint(isFirstPoint)
+    -- Проверка статического режима
+    if staticSelectionMode then
+        Chat:AddMessage("Для выделения новой области отключи статический режим отрисовки", "[f54949]")
+        return false
+    end
+
+    -- Проверка прав администратора/модератора
+    if not Player.IsAdmin and not Player.IsModerator then
+        return false
+    end
+
+    local pos = GetAimPoint()
+    if not pos then
+        LogChatMessage("Не удалось определить позицию — проверьте видимость цели", "[f54949]")
+        return false
+    end
+
+    if isFirstPoint then
+        FirstPos = pos
+        copied = false
+        DisableBuildPreview()  -- Отключаем превью при установке первой точки
+        Chat:AddMessage("Первая Точка Установлена: X= " .. pos.x .. ", Y= " .. pos.y .. ", Z= " .. pos.z, "[a455f2]")
+    else
+        SecondPos = pos
+        copied = false
+        Chat:AddMessage("Вторая Точка Установлена: X= " .. pos.x .. ", Y= " .. pos.y .. ", Z= " .. pos.z .. ", Область выделена", "[a455f2]")
+    end
+
+    return true
+end
+
+-- Функция для установки первой точки выделения
+function SetFirstPos()
+    SetSelectionPoint(true)
+end
+
+-- Функция для установки второй точки выделения
+function SetSecondPos()
+    SetSelectionPoint(false)
+end
+
+-- Функция обработки нажатий клавиш для выделения точек
+local function HandleSelectionKeyInput()
+    -- Установка первой точки по клавише G
+    if firstPosKey and CS.UnityEngine.Input.GetKeyDown(firstPosKey) then
+        SetFirstPos()
+        return true
+    end
+
+    -- Установка второй точки по клавише H
+    if secondPosKey and CS.UnityEngine.Input.GetKeyDown(secondPosKey) then
+        SetSecondPos()
+        return true
+    end
+
+    return false  -- ни одна клавиша не была нажата
+end
+
+function CopySelection()
+    if not selectAreaMode then
+        return
+    end
+
+    if not FirstPos or not SecondPos then
+        Chat:AddMessage("Сначала выдели область.", "[f54949]")
+        return
+    end
+
+    -- Если уже идёт копирование, блокируем повторный запуск
+    if isCopying then
+        Chat:AddMessage("Копирование уже выполняется!", "[f54949]")
+        return
+    end
+
+    buildData.source = "clipboard"
+    buildData.blocks = {}
+    buildData.firstPos = FirstPos  -- сохраняем базовую точку выделения
+
+    -- Определяем направление обхода для каждой оси
+    local xStep = FirstPos.x <= SecondPos.x and 1 or -1
+    local yStep = FirstPos.y <= SecondPos.y and 1 or -1
+    local zStep = FirstPos.z <= SecondPos.z and 1 or -1
+
+    local outOfBoundsCount = 0  -- счётчик позиций за границами
+    local airBlocksSkipped = 0  -- счётчик пропущенных блоков воздуха
+
+    -- Копируем блоки в порядке от FirstPos к SecondPos
+    for x = FirstPos.x, SecondPos.x, xStep do
+        for y = FirstPos.y, SecondPos.y, yStep do
+            for z = FirstPos.z, SecondPos.z, zStep do
+                local pos = CS.UnityEngine.Vector3(x, y, z)
+
+                -- ПРОВЕРКА: находится ли позиция в пределах карты
+                if IsPositionInBounds(pos) then
+                    -- Получаем данные о блоке
+                    local blockType = World:GetBlockType(pos)
+
+            -- ФИЛЬТРАЦИЯ: сохраняем только реальные блоки (blockType ≠ 0)
+            if blockType ~= 0 then
+                -- Рассчитываем offset относительно FirstPos (базовой точки выделения)
+                local offsetX = x - FirstPos.x
+                local offsetY = y - FirstPos.y
+                local offsetZ = z - FirstPos.z
+
+                local blockForm = World:GetBlockKind(pos) or 0
+
+                -- Сохраняем в buildData.blocks
+                table.insert(buildData.blocks, {
+                    offset = CS.UnityEngine.Vector3(offsetX, offsetY, offsetZ),
+            blockType = blockType,
+            blockForm = blockForm
+        })
+            else
+                airBlocksSkipped = airBlocksSkipped + 1
+            end
+        else
+            outOfBoundsCount = outOfBoundsCount + 1
+        end
+            end
+        end
+    end
+    Chat:AddMessage("Область скопирована.", "[a455f2]")
+
+    -- СБРАСЫВАЕМ флаг копирования
+    isCopying = false
+end
+
+
+local function SerializeBlocksToJson(blocks)
+    local parts = {}
+    table.insert(parts, '{"blocks":[')
+    for i, block in ipairs(blocks) do
+        local part = string.format(
+            '{"offset":{"x":%d,"y":%d,"z":%d},"blockType":%d,"blockForm":%d}',
+            block.offset.x, block.offset.y, block.offset.z,
+            block.blockType, block.blockForm
+        )
+        table.insert(parts, part)
+        if i < #blocks then
+            table.insert(parts, ',')
+        end
+    end
+    table.insert(parts, ']}')
+    return table.concat(parts)
+end
+
+-- Кодируем все не ASCII символы в %XX формат
+local function encode_filename(str)
+    return (str:gsub("[^%w%.%-]", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end))
+end
+
+-- Декодируем обратно %XX в символы
+local function decode_filename(str)
+    return (str:gsub("%%(%x%x)", function(h)
+        return string.char(tonumber(h,16))
+    end))
+end
+
+local function containsRussian(str)
+    return str:find("[\208-\209]") ~= nil -- приблизительная проверка на кириллицу в UTF-8
+end
+
+local function CreateBaseFolderIfNotExists()
+    local success, err = pcall(function()
+        if not CS.System.IO.Directory.Exists(baseFolder) then
+            CS.System.IO.Directory.CreateDirectory(baseFolder)
+            print("Создана основная папка мода: " .. baseFolder)
+        end
+    end)
+    if not success then
+        print("Ошибка создания основной папки: " .. (err or "unknown"))
+        LogChatMessage("Ошибка создания основной папки мода. Запустите игру от имени администратора.", "[f54949]")
+    end
+end
+
+local function CreateBuildsFolderIfNotExists()
+    -- Сначала создаём основную папку, если её нет
+    CreateBaseFolderIfNotExists()
+
+    local success, err = pcall(function()
+        if not CS.System.IO.Directory.Exists(buildsFolder) then
+            CS.System.IO.Directory.CreateDirectory(buildsFolder)
+            print("Создана папка: " .. buildsFolder)
+        end
+    end)
+    if not success then
+        print("Ошибка создания папки builds: " .. (err or "unknown"))
+        LogChatMessage("Ошибка создания папки для сохранений. Запустите игру от имени администратора.", "[f54949]")
+    end
+end
+
+local function CreateBindsFolderIfNotExists()
+    -- Сначала создаём основную папку, если её нет
+    CreateBaseFolderIfNotExists()
+
+    local success, err = pcall(function()
+        if not CS.System.IO.Directory.Exists(bindsFolder) then
+            CS.System.IO.Directory.CreateDirectory(bindsFolder)
+            LogChatMessage("Создана папка для биндов", "[a455f2]")
+        end
+    end)
+    if not success then
+    end
+end
+
+local function GetKeyName(keyCode)
+    if type(keyCode) == "userdata" then
+        local name = KeyCodeNames[keyCode]
+        if name then
+            return name
+        end
+    end
+    return "Unknown"
+end
+
+--героин. сохранение биндов в файл
+
+local function SaveBindsToFile()
+    local filepath = bindsFolder .. "keybinds.txt"
+    CreateBindsFolderIfNotExists()
+
+    local placeBlocksCode = CS.System.Convert.ToInt32(placeBlocksKey)
+    local destBlocksCode = CS.System.Convert.ToInt32(destBlocksKey)
+    local firstPosCode = CS.System.Convert.ToInt32(firstPosKey)
+    local secondPosCode = CS.System.Convert.ToInt32(secondPosKey)
+    local teleportCode = CS.System.Convert.ToInt32(teleportKey)
+    local noclipCode = CS.System.Convert.ToInt32(noclipKey)
+    local underBlockCode = CS.System.Convert.ToInt32(underBlockKey)
+    local areaModedCode = CS.System.Convert.ToInt32(areaModedKey)
+    local deleteAreaCode = CS.System.Convert.ToInt32(deleteAreaKey)
+    local copyAreaCode = CS.System.Convert.ToInt32(copyAreaKey)
+    local pasteAreaCode = CS.System.Convert.ToInt32(pasteAreaKey)
+    local replaceAreaCode = CS.System.Convert.ToInt32(replaceAreaKey)
+    local fillAreaCode = CS.System.Convert.ToInt32(fillAreaKey)
+    local undoActionCode = CS.System.Convert.ToInt32(undoActionKey)
+    local stopProcessCode = CS.System.Convert.ToInt32(stopProcessKey)
+    local clearAreaCode = CS.System.Convert.ToInt32(clearAreaKey)
+    local rotateLeftCode = CS.System.Convert.ToInt32(rotateLeftKey)
+    local rotateRightCode = CS.System.Convert.ToInt32(rotateRightKey)
+    local drawCode = CS.System.Convert.ToInt32(drawKey)
+
+    LogChatMessage("Сохраняем бинды: B=" .. placeBlocksCode .. ", D=" .. destBlocksCode .. ", FP=" .. firstPosCode .. ", SP=" .. secondPosCode .. ", TP=" .. teleportCode .. "[ffff00]")
+
+    local content = string.format(
+        "placeBlocksKey = %d\ndestBlocksKey = %d\nfirstPosKey = %d\nsecondPosKey = %d\nteleportKey = %d\nnoclipKey = %d\nunderBlockKey = %d\nareaModedKey = %d\ndeleteAreaKey = %d\ncopyAreaKey = %d\npasteAreaKey = %d\nreplaceAreaKey = %d\nfillAreaKey = %d\nundoActionKey = %d\nstopProcessKey = %d\nclearAreaKey = %d\nrotateLeftKey = %d\nrotateRightKey = %d\ndrawKey = %d",
+        placeBlocksCode, destBlocksCode, firstPosCode, secondPosCode, teleportCode, noclipCode, underBlockCode, areaModedCode, deleteAreaCode, copyAreaCode, pasteAreaCode, replaceAreaCode, fillAreaCode, undoActionCode, stopProcessCode, clearAreaCode, rotateLeftCode, rotateRightCode, drawCode
+    )
+
+    local file = io.open(filepath, "w")
+    if file then
+        file:write(content)
+        file:close()
+        LogChatMessage("Бинды сохранены в: " .. filepath, "[00ff00]")
+    else
+        LogChatMessage("Ошибка сохранения файла: " .. filepath, "[ff0000]")
+    end
+end
+
+--загрузка героиновых биндов из файла
+local function LoadBindsFromFile()
+    local filepath = bindsFolder .. "keybinds.txt"
+    local file = io.open(filepath, "r")
+
+    if not file then
+        LogChatMessage("Файл биндов не найден: " .. filepath, "[ff0000]")
+        return false
+    end
+
+    LogChatMessage("Загружаем бинды из: " .. filepath, "[00ff00]")
+    local content = file:read("*a")
+    file:close()
+
+    -- Инициализируем все бинды None на случай, если их нет в файле
+    placeBlocksKey = CS.UnityEngine.KeyCode.None
+    destBlocksKey = CS.UnityEngine.KeyCode.None
+    firstPosKey = CS.UnityEngine.KeyCode.None
+    secondPosKey = CS.UnityEngine.KeyCode.None
+    teleportKey = CS.UnityEngine.KeyCode.None
+    noclipKey = CS.UnityEngine.KeyCode.None
+    underBlockKey = CS.UnityEngine.KeyCode.None
+    areaModedKey = CS.UnityEngine.KeyCode.None
+    deleteAreaKey = CS.UnityEngine.KeyCode.None
+    copyAreaKey = CS.UnityEngine.KeyCode.None
+    pasteAreaKey = CS.UnityEngine.KeyCode.None
+    replaceAreaKey = CS.UnityEngine.KeyCode.None
+    fillAreaKey = CS.UnityEngine.KeyCode.None
+    undoActionKey = CS.UnityEngine.KeyCode.None
+    stopProcessKey = CS.UnityEngine.KeyCode.None
+    clearAreaKey = CS.UnityEngine.KeyCode.None
+    rotateLeftKey = CS.UnityEngine.KeyCode.None
+    rotateRightKey = CS.UnityEngine.KeyCode.None
+    drawKey = CS.UnityEngine.KeyCode.None
+
+    for line in content:gmatch("[^\n]+") do
+        if line:match("%S") then
+            local key, value = line:match("(%w+)%s*=%s*(%d+)")
+            if key and value then
+                local keyCodeNum = tonumber(value)
+                local keyCodeObj = codeToKeyCode[keyCodeNum]
+
+                if keyCodeObj then
+                    if key == "placeBlocksKey" then
+                        placeBlocksKey = keyCodeObj
+                elseif key == "destBlocksKey" then
+                    destBlocksKey = keyCodeObj
+                elseif key == "firstPosKey" then
+                    firstPosKey = keyCodeObj
+                elseif key == "secondPosKey" then
+                    secondPosKey = keyCodeObj
+                elseif key == "teleportKey" then
+                    teleportKey = keyCodeObj
+                elseif key == "noclipKey" then
+                    noclipKey = keyCodeObj
+                elseif key == "underBlockKey" then
+                    underBlockKey = keyCodeObj
+                elseif key == "areaModedKey" then
+                    areaModedKey = keyCodeObj
+                elseif key == "deleteAreaKey" then
+                    deleteAreaKey = keyCodeObj 
+                elseif key == "copyAreaKey" then
+                    copyAreaKey = keyCodeObj 
+                elseif key == "pasteAreaKey" then
+                    pasteAreaKey = keyCodeObj 
+                elseif key == "replaceAreaKey" then
+                    replaceAreaKey = keyCodeObj 
+                elseif key == "fillAreaKey" then
+                    fillAreaKey = keyCodeObj 
+                elseif key == "undoActionKey" then
+                    undoActionKey = keyCodeObj 
+                elseif key == "stopProcessKey" then
+                    stopProcessKey = keyCodeObj 
+                elseif key == "clearAreaKey" then
+                    clearAreaKey = keyCodeObj 
+                elseif key == "rotateLeftKey" then
+                    rotateLeftKey = keyCodeObj 
+                elseif key == "rotateRightKey" then
+                    rotateRightKey = keyCodeObj 
+                elseif key == "drawKey" then
+                    drawKey = keyCodeObj 
+                end
+            else
+                LogChatMessage("Код для клавиши не найден в таблице: " .. value, "[ff0000]")
+            end
+        end
+    end
+    end
+
+    return true
+end
+
+
+local function AssignKeyToBind(keyCode)
+    if awaitingKeyBind == "placeBlocks" then
+        placeBlocksKey = keyCode
+    elseif awaitingKeyBind == "destBlocks" then
+        destBlocksKey = keyCode
+    elseif awaitingKeyBind == "firstPos" then
+        firstPosKey = keyCode
+    elseif awaitingKeyBind == "secondPos" then
+        secondPosKey = keyCode
+    elseif awaitingKeyBind == "teleport" then
+        teleportKey = keyCode
+    elseif awaitingKeyBind == "noclip" then
+        noclipKey = keyCode
+    elseif awaitingKeyBind == "underBlock" then
+        underBlockKey = keyCode
+    elseif awaitingKeyBind == "areaModed" then
+        areaModedKey = keyCode
+    elseif awaitingKeyBind == "deleteArea" then
+        deleteAreaKey = keyCode
+    elseif awaitingKeyBind == "copyArea" then
+        copyAreaKey = keyCode
+    elseif awaitingKeyBind == "pasteArea" then
+        pasteAreaKey = keyCode
+    elseif awaitingKeyBind == "replaceArea" then
+        replaceAreaKey = keyCode
+    elseif awaitingKeyBind == "fillArea" then
+        fillAreaKey = keyCode
+    elseif awaitingKeyBind == "undoAction" then
+        undoActionKey = keyCode
+    elseif awaitingKeyBind == "stopProcess" then
+        stopProcessKey = keyCode
+    elseif awaitingKeyBind == "clearArea" then
+        clearAreaKey = keyCode
+    elseif awaitingKeyBind == "rotateLeft" then
+        rotateLeftKey = keyCode
+    elseif awaitingKeyBind == "rotateRight" then
+        rotateRightKey = keyCode
+    elseif awaitingKeyBind == "draw" then
+        drawKey = keyCode
+    end
+
+    awaitingKeyBind = nil
+    SaveBindsToFile()
+end
+
+local function CheckMouseButtons()
+    if CS.UnityEngine.Input.GetKeyDown(CS.UnityEngine.KeyCode.Mouse0) then
+        AssignKeyToBind(CS.UnityEngine.KeyCode.Mouse0)
+        return true
+    elseif CS.UnityEngine.Input.GetKeyDown(CS.UnityEngine.KeyCode.Mouse1) then
+        AssignKeyToBind(CS.UnityEngine.KeyCode.Mouse1)
+        return true
+    elseif CS.UnityEngine.Input.GetKeyDown(CS.UnityEngine.KeyCode.Mouse2) then
+        AssignKeyToBind(CS.UnityEngine.KeyCode.Mouse2)
+        return true
+    end
+    return false
+end
+
+
+function Initialize()
+    initializeSkin2()
+    collectgarbage("setpause", 150)  -- ждать +50 % памяти
+    collectgarbage("setstepmul", 200) -- стандартная скорость
+    CreateBaseFolderIfNotExists()
+    CreateBindsFolderIfNotExists()
+
+    local loaded = LoadBindsFromFile()
+
+    if not loaded then
+        placeBlocksKey = CS.UnityEngine.KeyCode.E
+        destBlocksKey = CS.UnityEngine.KeyCode.X
+        firstPosKey = CS.UnityEngine.KeyCode.G
+        secondPosKey = CS.UnityEngine.KeyCode.H
+        teleportKey = CS.UnityEngine.KeyCode.Mouse2
+        noclipKey = CS.UnityEngine.KeyCode.LeftControl
+        underBlockKey = CS.UnityEngine.KeyCode.RightAlt
+        areaModedKey = CS.UnityEngine.KeyCode.B
+        deleteAreaKey = CS.UnityEngine.KeyCode.None  -- оставляем None при первом запуске
+        copyAreaKey = CS.UnityEngine.KeyCode.None  
+        pasteAreaKey = CS.UnityEngine.KeyCode.None  
+        replaceAreaKey = CS.UnityEngine.KeyCode.None  
+        fillAreaKey = CS.UnityEngine.KeyCode.None  
+        undoActionKey = CS.UnityEngine.KeyCode.None
+        stopProcessKey = CS.UnityEngine.KeyCode.None
+        clearAreaKey = CS.UnityEngine.KeyCode.None
+        rotateLeftKey = CS.UnityEngine.KeyCode.None
+        rotateRightKey = CS.UnityEngine.KeyCode.None
+        drawKey = CS.UnityEngine.KeyCode.None
+        SaveBindsToFile()  -- сохраняем с None, чтобы файл появился
+    end
+
+    isInitialized = true
+end
+
+function SaveSelectionToFile(filename)
+    if not FirstPos or not SecondPos then
+       Chat:AddMessage("Сначала скопируй область", "[f54949]")
+        return
+    end
+
+    CreateBuildsFolderIfNotExists()
+
+    local blocks = {}
+    local minX = math.min(FirstPos.x, SecondPos.x)
+    local maxX = math.max(FirstPos.x, SecondPos.x)
+    local minY = math.min(FirstPos.y, SecondPos.y)
+    local maxY = math.max(FirstPos.y, SecondPos.y)
+    local minZ = math.min(FirstPos.z, SecondPos.z)
+    local maxZ = math.max(FirstPos.z, SecondPos.z)
+
+    for x = minX, maxX do
+        for y = minY, maxY do
+            for z = minZ, maxZ do
+                local pos = CS.UnityEngine.Vector3(x, y, z)
+                local blockType = World:GetBlockType(pos)
+                if blockType ~= 0 then
+                    local blockForm = 0
+                    if World.GetBlockKind then
+                        blockForm = World:GetBlockKind(pos)
+                    end
+                    local offset = {x = x - minX, y = y - minY, z = z - minZ}
+                    table.insert(blocks, {offset = offset, blockType = blockType, blockForm = blockForm})
+                end
+            end
+        end
+    end
+
+    local jsonStr = SerializeBlocksToJson(blocks)
+    local encodedFilename = encode_filename(filename)
+
+    local filepath = buildsFolder .. encodedFilename
+    local file = io.open(filepath, "w")
+    if file then
+        file:write(jsonStr)
+        file:close()
+       Chat:AddMessage("Область успешно сохранена: " .. filename, "[a455f2]")
+        UpdateSavedBuildsList()
+    else
+       LogChatMessage("Ошибка записи файла: " .. filename, "[f54949]")
+    end
+end
+
+function UpdateSavedBuildsList()
+    savedBuilds = {}
+    CreateBuildsFolderIfNotExists()
+    local files = CS.System.IO.Directory.GetFiles(buildsFolder, "*.json")
+    for i = 0, files.Length - 1 do
+        local fullPath = files[i]
+        local fileName = CS.System.IO.Path.GetFileName(fullPath)
+        local decodedName = decode_filename(fileName)
+        table.insert(savedBuilds, decodedName)
+    end
+end
+
+UpdateSavedBuildsList() -- обновим при запуске
+Initialize()
+
+function LoadBuildFromFile(decodedFilename)
+    currentRotation = 0
+    local filename = encode_filename(decodedFilename)
+    local filepath = buildsFolder .. filename
+
+    local file = io.open(filepath, "r")
+    if not file then
+        LogChatMessage("Не удалось открыть файл: " .. decodedFilename, "[f54949]")
+        return
+    end
+
+    local content = file:read("*a")
+    file:close()
+
+    -- ОЧИЩАЕМ И ИНИЦИАЛИЗИРУЕМ ЕДИНУЮ СТРУКТУРУ
+    buildData.source = "file"
+    buildData.blocks = {}
+    previewBuildData = {}  -- данные для превью
+
+    -- Устанавливаем ID текущей постройки (используем имя файла как уникальный идентификатор)
+    currentBuildId = decodedFilename
+
+    -- Парсим блоки
+    for offsetX, offsetY, offsetZ, blockType, blockForm in content:gmatch(
+        '"offset"%s*:%s*{[^}]*"x"%s*:%s*(%-?%d+),[^}]*"y"%s*:%s*(%-?%d+),[^}]*"z"%s*:%s*(%-?%d+)}%s*,%s*"blockType"%s*:%s*(%d+),%s*"blockForm"%s*:%s*(%d+)') do
+        local blockData = {
+            offset = CS.UnityEngine.Vector3(tonumber(offsetX), tonumber(offsetY), tonumber(offsetZ)),
+            blockType = tonumber(blockType),
+            blockForm = tonumber(blockForm)
+        }
+        table.insert(buildData.blocks, blockData)
+        table.insert(previewBuildData, blockData)
+    end
+
+    if #buildData.blocks == 0 then
+        LogChatMessage("Не удалось распарсить ни одного блока из файла: " .. decodedFilename, "[f54949]")
+        return
+    end
+
+    -- Вычисляем границы превью
+    CalculatePreviewBounds()
+
+    useCopiedBlocks = false
+    Chat:AddMessage("Файл " .. decodedFilename .. " загружен. Всего блоков: " .. tostring(#buildData.blocks), "[a455f2]")
+
+    -- После загрузки новой постройки сбрасываем меш, чтобы он пересоздался
+    CleanupPreviewMesh()
+end
+
+local function CollectBlocksInSelection()
+    if not FirstPos or not SecondPos then
+        Chat:AddMessage("Сначала выдели область", "[f54949]")
+        return {}
+    end
+
+    local xOrder = getRange(FirstPos.x, SecondPos.x)
+    local yOrder = getRange(FirstPos.y, SecondPos.y)
+    local zOrder = getRange(FirstPos.z, SecondPos.z)
+
+    local blocks = {}
+
+    for _, x in ipairs(xOrder) do
+        for _, z in ipairs(zOrder) do
+            for _, y in ipairs(yOrder) do
+                local pos = CS.UnityEngine.Vector3(x, y, z)
+                local blockType = World:GetBlockType(pos)
+                if blockType ~= 0 then
+                    table.insert(blocks, pos)
+                end
+            end
+        end
+    end
+
+    return blocks
+end
+
+
+local function CollectAllPositionsInSelection()
+    if not FirstPos or not SecondPos then
+       -- Chat:AddMessage("Сначала выдели область", "[f54949]")
+        return {}
+    end
+
+    local xOrder = getRange(FirstPos.x, SecondPos.x)
+    local yOrder = getRange(FirstPos.y, SecondPos.y)
+    local zOrder = getRange(FirstPos.z, SecondPos.z)
+
+    local positions = {}
+
+    for _, x in ipairs(xOrder) do
+        for _, z in ipairs(zOrder) do
+            for _, y in ipairs(yOrder) do
+                local pos = CS.UnityEngine.Vector3(x, y, z)
+                table.insert(positions, pos)
+            end
+        end
+    end
+
+    return positions
+end
+
+function OpenFolder(path)
+    -- Нормализуем путь: заменяем обратные слеши на прямые
+    path = path:gsub("\\", "/")
+
+    -- Проверяем существование папки
+    local exists = CS.System.IO.Directory.Exists(path)
+    if not exists then
+        LogChatMessage("Папка не существует: " .. path, "[ff0000]")
+        -- Пытаемся создать папку
+        local success, err = pcall(function()
+            CS.System.IO.Directory.CreateDirectory(path)
+        end)
+        if success then
+            LogChatMessage("Папка создана: " .. path, "[00ff00]")
+            exists = true
+        else
+            LogChatMessage("Ошибка создания папки: " .. (err or "unknown"), "[ff0000]")
+            return
+        end
+    end
+
+    -- Отладка: выводим путь в чат
+    print("Открываем папку: " .. path)
+    LogChatMessage("Открываем папку: " .. path, "[ffff00]")
+
+    -- Формируем корректный URL для OpenURL
+    local folderPath
+    if CS.UnityEngine.Application.platform == CS.UnityEngine.RuntimePlatform.WindowsPlayer or
+       CS.UnityEngine.Application.platform == CS.UnityEngine.RuntimePlatform.WindowsEditor then
+        -- Для Windows: используем file:/// с тремя слешами
+        folderPath = "file:///" .. path
+    else
+        -- Для macOS и Linux: используем file:// с двумя слешами
+        folderPath = "file://" .. path
+    end
+
+    -- Открываем папку через OpenURL
+    CS.UnityEngine.Application.OpenURL(folderPath)
+end
+
+function SplitIntoChunks(blockList, chunkSize)
+    local chunks = {}
+    for i = 1, #blockList, chunkSize do
+        local chunk = {}
+        for j = i, math.min(i + chunkSize - 1, #blockList) do
+            table.insert(chunk, blockList[j])
+        end
+        table.insert(chunks, chunk)
+    end
+    return chunks
+end
+
+function StartFilling()
+    if not selectAreaMode then
+        return
+    end
+
+    local desiredBlockType = Player.CurrentBlock
+    local desiredBlockForm = Player.CurrentKind
+
+    fillPositions = CollectAllPositionsInSelection()
+    if #fillPositions == 0 then
+        Chat:AddMessage("Сначала выдели область", "[f54949]")
+        return
+    end
+
+    -- Переиспользуем lastActionBlocks
+    if not lastActionBlocks then
+        lastActionBlocks = {}
+    else
+        for k in pairs(lastActionBlocks) do lastActionBlocks[k] = nil end
+    end
+
+    -- Переиспользуем blocksToReplace
+    if not blocksToReplace then
+        blocksToReplace = {}
+    else
+        for k in pairs(blocksToReplace) do blocksToReplace[k] = nil end
+    end
+
+    local fillIndex = 1  -- используем индекс вместо table.insert
+
+    for _, pos in ipairs(fillPositions) do
+        local oldBlockType = World:GetBlockType(pos)
+        local oldBlockForm = World:GetBlockKind(pos)
+
+        -- Если блок уже нужный — пропускаем
+        if oldBlockType == desiredBlockType and oldBlockForm == desiredBlockForm then
+            goto continue
+        end
+
+        -- Сохраняем старое состояние ТОЛЬКО для изменённых блоков
+        lastActionBlocks[fillIndex] = {
+            pos = pos,
+            blockType = oldBlockType,
+            blockForm = oldBlockForm
+        }
+
+        blocksToReplace[fillIndex] = {
+            pos = pos,
+            blockType = desiredBlockType,
+            blockForm = desiredBlockForm,
+            processed = false
+        }
+        fillIndex = fillIndex + 1
+
+        ::continue::
+    end
+
+    currentFillIndex = 1
+    isFilling = true
+    isReplacing = false
+    isDeleting = false
+    isPlacing = false
+
+    LogChatMessage(
+        string.format("Заполнение: %d блоков требуют изменения", (fillIndex - 1)),
+        "[9f40ff]"
+    )
+end
+
+function ToggleDeleteMode()
+    if deleteMode == "all" then
+        deleteMode = "selected_type"
+        Chat:AddMessage("Режим удаления: только выбранный тип блока", "[a455f2]")
+    else
+        deleteMode = "all"
+        Chat:AddMessage("Режим удаления: все блоки", "[a455f2]")
+    end
+end
+
+function ToggleBuildDestroyMode()
+    if buildDestroyMode == "hold" then
+        buildDestroyMode = "click"
+        Chat:AddMessage("Режим постройки/удаления: одиночный клик", "[a455f2]")
+    else
+        buildDestroyMode = "hold"
+        Chat:AddMessage("Режим постройки/удаления: удержание клавиши", "[a455f2]")
+    end
+end
+
+function ToggleReplaceMode()
+    if replaceMode == "texture" then
+        replaceMode = "full"
+        Chat:AddMessage("Режим замены: всё (тип + форма)", "[a455f2]")
+    else
+        replaceMode = "texture"
+        Chat:AddMessage("Режим замены: только текстура", "[a455f2]")
+    end
+end
+
+function ToggleVisibility()
+    isSelectionVisible = not isSelectionVisible
+    isPreviewVisible = not isPreviewVisible
+
+    local selectionStatus = isSelectionVisible and "включена" or "выключена"
+    local previewStatus = isPreviewVisible and "включено" or "выключено"
+end
+
+function StartDestroy()
+    if not selectAreaMode then
+        Chat:AddMessage("Включи режим копирования для работы с областью.", "[f54949]")
+        return
+    end
+
+    if isDeleting then  -- защита от повторного запуска
+        Chat:AddMessage("Удаление уже выполняется!", "[f54949]")
+        return
+    end
+
+    local rawBlocks = CollectBlocksInSelection()
+    if #rawBlocks == 0 then
+        Chat:AddMessage("В выделенной области нет блоков для удаления.", "[f54949]")
+        return
+    end
+
+    -- Определяем целевой тип блока, если режим "selected_type"
+    local targetBlockType = nil
+    if deleteMode == "selected_type" then
+        targetBlockType = Player.CurrentBlock
+        if not targetBlockType then
+            Chat:AddMessage("ОШИБКА: Текущий блок не выбран в инвентаре", "[f54949]")
+            return
+        end
+    end
+
+    -- КЭШИРОВАНИЕ: получаем все данные о блоках ОДИН РАЗ
+    -- Переиспользуем cachedBlocks, если она уже существует
+    if not cachedBlocks then
+        cachedBlocks = {}
+    else
+        for k in pairs(cachedBlocks) do cachedBlocks[k] = nil end
+    end
+
+    for _, pos in ipairs(rawBlocks) do
+        cachedBlocks[pos] = {
+            type = World:GetBlockType(pos),
+            form = World:GetBlockKind(pos) or 0
+        }
+    end
+
+    -- Сохраняем текущее состояние блоков для Undo
+    -- ПЕРЕИНИЦИАЛИЗАЦИЯ lastActionBlocks (вместо переиспользования)
+    lastActionBlocks = {}  -- создаём новую таблицу
+
+    -- Инициализируем области для пересчёта освещения
+    minX, minY, minZ = math.huge, math.huge, math.huge
+    maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
+
+    -- Переиспользуем blocksToDelete
+    if not blocksToDelete then
+        blocksToDelete = {}
+    else
+        for k in pairs(blocksToDelete) do blocksToDelete[k] = nil end
+    end
+
+    local deleteIndex = 1  -- используем индекс вместо table.insert
+
+    for _, pos in ipairs(rawBlocks) do
+        local blockData = cachedBlocks[pos]
+        local oldType = blockData.type
+        local oldForm = blockData.form
+
+        -- Пропускаем блок, если режим "selected_type" и тип не совпадает
+        if deleteMode == "selected_type" and oldType ~= targetBlockType then
+            goto continue
+        end
+
+        -- Заполняем по индексу вместо table.insert
+        lastActionBlocks[deleteIndex] = {pos = pos, blockType = oldType, blockForm = oldForm}
+
+        -- Обновляем границы области
+        if pos.x < minX then minX = pos.x end
+        if pos.y < minY then minY = pos.y end
+        if pos.z < minZ then minZ = pos.z end
+
+        if pos.x > maxX then maxX = pos.x end
+        if pos.y > maxY then maxY = pos.y end
+        if pos.z > maxZ then maxZ = pos.z end
+
+        -- Добавляем блок в список удаления с флагом обработки
+        blocksToDelete[deleteIndex] = {
+            pos = pos,
+            processed = false
+        }
+        deleteIndex = deleteIndex + 1
+
+        ::continue::
+    end
+
+    if deleteIndex == 1 then  -- deleteIndex не увеличился, значит, блоков для удаления нет
+        if deleteMode == "selected_type" then
+            Chat:AddMessage("В выделенной области нет блоков типа " .. targetBlockType, "[f54949]")
+        else
+            Chat:AddMessage("В выделенной области нет блоков для удаления.", "[f54949]")
+        end
+        return
+    end
+
+    currentDeleteIndex = 1
+    isDeleting = true
+    isReplacing = false
+    isPlacing = false
+    isFilling = false
+
+    Chat:AddMessage("Запуск удаления. Режим: " ..
+        (deleteMode == "all" and "все блоки" or "только выбранный тип") ..
+        ". Блоков: " .. (deleteIndex - 1), "[a455f2]")
+end
+
+function StartReplacing()
+    if not selectAreaMode then
+        return
+    end
+
+    local desiredBlockType = Player.CurrentBlock
+    local desiredBlockForm = Player.CurrentKind
+
+    -- Получаем все позиции в выделенной области
+    local blocks = CollectAllPositionsInSelection()
+    if #blocks == 0 then
+        Chat:AddMessage("Область пуста или не выделена", "[f54949]")
+        return
+    end
+
+    -- Переиспользуем lastActionBlocks
+    if not lastActionBlocks then
+        lastActionBlocks = {}
+    else
+        for k in pairs(lastActionBlocks) do lastActionBlocks[k] = nil end
+    end
+
+    -- Переиспользуем blocksToReplace
+    if not blocksToReplace then
+        blocksToReplace = {}
+    else
+        for k in pairs(blocksToReplace) do blocksToReplace[k] = nil end
+    end
+
+    local replaceIndex = 1  -- используем индекс вместо table.insert
+
+    for _, pos in ipairs(blocks) do
+        -- Проверяем, находится ли позиция в границах карты
+        if not IsPositionInBounds(pos) then
+            goto continue
+        end
+
+        local oldBlockType = World:GetBlockType(pos)
+        local oldBlockForm = World:GetBlockKind(pos)
+
+        -- ПРОПУСКАЕМ ВОЗДУШНЫЕ БЛОКИ (тип 0)
+        if oldBlockType == 0 then  -- 0 обычно означает воздух/пустое пространство
+            goto continue
+        end
+
+        -- Определяем, нужно ли заменять блок в зависимости от режима
+        local shouldReplace = false
+
+        if replaceMode == "texture" then
+            -- Только текстура: заменяем, если тип отличается
+            if oldBlockType ~= desiredBlockType then
+                shouldReplace = true
+            end
+        else  -- replaceMode == "full"
+            -- Полностью: заменяем, если тип ИЛИ форма отличаются
+            if oldBlockType ~= desiredBlockType or oldBlockForm ~= desiredBlockForm then
+                shouldReplace = true
+            end
+        end
+
+        if not shouldReplace then
+            goto continue
+        end
+
+        -- Сохраняем старое состояние для возможности отмены
+        lastActionBlocks[replaceIndex] = {
+            pos = pos,
+            blockType = oldBlockType,
+            blockForm = oldBlockForm
+        }
+
+        blocksToReplace[replaceIndex] = {
+            pos = pos,
+            blockType = desiredBlockType,
+            blockForm = replaceMode == "texture" and oldBlockForm or desiredBlockForm,
+            processed = false
+        }
+        replaceIndex = replaceIndex + 1
+
+        ::continue::
+    end
+
+    currentReplaceIndex = 1
+    isReplacing = true
+    isDeleting = false
+    isPlacing = false
+    isFilling = false
+
+    Chat:AddMessage("Запуск замены. Режим: " .. (replaceMode == "texture" and "только текстура" or "всё (тип+форма)") .. ". Блоков для замены: " .. (replaceIndex - 1), "[a455f2]")
+end
+
+function IsPositionInBounds(pos)
+    if World.IsInfinite then
+        return true  -- На бесконечной карте все позиции допустимы
+    end
+    -- Для ограниченной карты проверяем строго внутри границ
+    return pos.x >= 0 and pos.x < World.SizeX and
+           pos.y >= 0 and pos.y < World.SizeY and
+           pos.z >= 0 and pos.z < World.SizeZ
+end
+
+function CheckMapBounds()
+    if World.IsInfinite then
+       -- Chat:AddMessage("Карта бесконечная — ограничений нет", "[a455f2]")
+    else
+        LogChatMessage(
+            string.format("Границы карты: X[0-%d], Y[0-%d], Z[0-%d]",
+            World.SizeX - 1, World.SizeY - 1, World.SizeZ - 1),
+            "[a455f2]"
+        )
+    end
+end
+
+function StartPasting()
+    if not selectAreaMode then
+        return
+    end
+
+    -- Блокировка: если идёт копирование или вставка, не разрешаем начать новую вставку
+    if isCopying then
+        Chat:AddMessage("Нельзя вставить область: копирование ещё не завершено!", "[f54949]")
+        return
+    end
+
+    if isPasteInProgress then
+        Chat:AddMessage("Постройка уже выполняется! Дождись завершения.", "[f54949]")
+        return
+    end
+
+    -- Используем глобальную buildData, не создаём локальную
+    if not buildData.source or #buildData.blocks == 0 then
+        Chat:AddMessage("Нет данных для постройки!!!", "[f54949]")
+        return
+    end
+
+    local pos = GetAimPoint()
+    if not pos then
+        Chat:AddMessage("Не удалось определить позицию для постройки", "[f54949]")
+        return
+    end
+
+    isPasteInProgress = true  -- устанавливаем флаг: вставка началась
+
+    -- Очистка данных перед использованием
+    blocksToPlace = blocksToPlace or {}
+    for k in pairs(blocksToPlace) do blocksToPlace[k] = nil end
+
+    lastActionBlocks = lastActionBlocks or {}
+    for k in pairs(lastActionBlocks) do lastActionBlocks[k] = nil end
+
+    local skippedCount = 0
+    local outOfBoundsCount = 0
+    local alreadyExistsCount = 0
+
+    local placeIndex = 1
+
+    for _, data in ipairs(buildData.blocks) do
+        local worldPos = CS.UnityEngine.Vector3(
+            pos.x + data.offset.x,
+            pos.y + data.offset.y,
+            pos.z + data.offset.z
+        )
+
+        if IsPositionInBounds(worldPos) then
+            -- Читаем данные о блоке только один раз
+            local existingBlockType = World:GetBlockType(worldPos)
+            local existingBlockForm = 0
+
+            -- ПОЛУЧАЕМ ФОРМУ ТОЛЬКО ЕСЛИ БЛОК СУЩЕСТВУЕТ (blockType ≠ 0)
+            if existingBlockType ~= 0 then
+                existingBlockForm = World:GetBlockKind(worldPos) or 0
+            end
+
+            -- Сохраняем исходное состояние блока для отмены
+            lastActionBlocks[placeIndex] = {
+                pos = worldPos,
+                blockType = existingBlockType,
+                blockForm = existingBlockForm
+            }
+
+            if existingBlockType ~= 0 and
+               existingBlockType == data.blockType and
+               existingBlockForm == data.blockForm then
+                alreadyExistsCount = alreadyExistsCount + 1
+            else
+                blocksToPlace[placeIndex] = {
+                    pos = worldPos,
+            blockType = data.blockType,
+            blockForm = data.blockForm,
+            processed = false  -- флаг обработки
+        }
+                placeIndex = placeIndex + 1
+            end
+        else
+            outOfBoundsCount = outOfBoundsCount + 1
+        end
+    end
+
+    -- Сообщения о прогрессе
+    if outOfBoundsCount > 0 then
+        LogChatMessage(
+            "Пропущено " .. outOfBoundsCount .. " блоков за границами карты",
+            "[f54949]"
+        )
+    end
+
+    if alreadyExistsCount > 0 then
+        LogChatMessage(
+            "Пропущено " .. alreadyExistsCount .. " уже существующих блоков",
+            "[ffff00]"
+        )
+    end
+
+    if placeIndex == 1 then  -- placeIndex не увеличился, значит, ставить нечего
+        isPasteInProgress = false  -- сброс флага, если нечего ставить
+        LogChatMessage(
+            "Все блоки уже стоят в этих позициях.",
+            "[f54949]"
+        )
+        return
+    end
+
+    currentPlaceIndex = 1
+    isPlacing = true
+    isDeleting = false
+    isReplacing = false
+
+    Chat:AddMessage("Запуск постройки. Блоков для установки: " .. (placeIndex - 1), "[a455f2]")
+end
+
+function StartUndo()
+    if not selectAreaMode then
+        return
+    end
+
+    if isPasteInProgress then
+        Chat:AddMessage("Нельзя отменить действие во время постройки области. Дождись завершения!", "[f54949]")
+        return
+    end
+
+    if not lastActionBlocks or #lastActionBlocks == 0 then
+        Chat:AddMessage("Нет действий для отмены", "[f54949]")
+        return
+    end
+
+    -- Разбиваем блоки на чанки для постепенной обработки
+    local chunkSize = 50
+    undoChunks = SplitIntoChunks(lastActionBlocks, chunkSize)
+    currentChunkIndex = 1
+    currentBlockIndexInChunk = 1
+
+    isUndoing = true
+    isDeleting = false
+    isReplacing = false
+    isPlacing = false
+    isFilling = false
+
+    --[[Chat:AddMessage(
+        string.format("Начинаем отмену: %d блоков в %d чанках",
+        #lastActionBlocks, #undoChunks),
+        "[9f40ff]"
+    )]]
+end
+
+function CalculatePreviewBounds()
+    if not previewBuildData or #previewBuildData == 0 then
+        previewFirstPos = nil
+        previewSecondPos = nil
+        return
+    end
+
+    local minX, minY, minZ = math.huge, math.huge, math.huge
+    local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
+
+    for _, data in ipairs(previewBuildData) do
+        local x, y, z = data.offset.x, data.offset.y, data.offset.z
+        minX = math.min(minX, x)
+        minY = math.min(minY, y)
+        minZ = math.min(minZ, z)
+        maxX = math.max(maxX, x)
+        maxY = math.max(maxY, y)
+        maxZ = math.max(maxZ, z)
+    end
+
+    previewFirstPos = CS.UnityEngine.Vector3(minX, minY, minZ)
+    previewSecondPos = CS.UnityEngine.Vector3(maxX, maxY, maxZ)  -- +1 для корректного отображения границ
+end
+
+function DrawSelectionBoxGL()
+    if not isSelectionVisible then
+        return
+    end
+
+    if not selectAreaMode then  -- если режим выделения выключен, не отрисовываем
+        return
+    end
+
+    if not Player.IsAdmin and not Player.IsModerator then
+        return
+    end
+
+    if not FirstPos or not SecondPos then
+        return
+    end
+
+    local cam = CS.UnityEngine.Camera.current
+    if not cam then
+        return
+    end
+
+    -- Инициализация материала (существующий код)
+    if not crossMaterial then
+        crossMaterial = CS.UnityEngine.Material(CS.UnityEngine.Shader.Find("Sprites/Default"))
+        if not crossMaterial then
+            return
+        end
+        crossMaterial:SetInt("_SrcBlend", CS.UnityEngine.Rendering.BlendMode.SrcAlpha)
+        crossMaterial:SetInt("_DstBlend", CS.UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha)
+        crossMaterial:SetInt("_Cull", CS.UnityEngine.Rendering.CullMode.Off)
+        crossMaterial:SetInt("_ZWrite", 0)
+        crossMaterial:SetInt("_ZTest", 0)
+        crossMaterial:EnableKeyword("_ALPHABLEND_ON")
+    end
+
+    local passSuccess = crossMaterial:SetPass(0)
+    if not passSuccess then
+        return
+    end
+
+    -- Определяем позиции для отрисовки
+    local drawFirstPos, drawSecondPos, drawRotation
+
+    if staticSelectionMode and staticFirstPos and staticSecondPos then
+        -- В статическом режиме используем изначальные координаты без поворота
+        drawFirstPos = staticFirstPos
+        drawSecondPos = staticSecondPos
+        drawRotation = 0
+    else
+        -- В динамическом режиме используем текущие позиции и поворот
+        drawFirstPos = FirstPos + offset
+        drawSecondPos = SecondPos + offset
+        drawRotation = currentRotation
+    end
+
+    -- Расчёт границ с учётом поворота
+    local rotatedFirstPos = drawFirstPos
+    local rotatedSecondPos = RotatePointAroundY(drawSecondPos, drawFirstPos, -drawRotation)
+
+    local minX = math.min(rotatedFirstPos.x, rotatedSecondPos.x)
+    local maxX = math.max(rotatedFirstPos.x, rotatedSecondPos.x) + 1
+    local minY = math.min(rotatedFirstPos.y, rotatedSecondPos.y)
+    local maxY = math.max(rotatedFirstPos.y, rotatedSecondPos.y) + 1
+    local minZ = math.min(rotatedFirstPos.z, rotatedSecondPos.z)
+    local maxZ = math.max(rotatedFirstPos.z, rotatedSecondPos.z) + 1
+
+    -- Создание углов коробки
+    local corners = {
+        CS.UnityEngine.Vector3(minX, minY, minZ),
+        CS.UnityEngine.Vector3(maxX, minY, minZ),
+        CS.UnityEngine.Vector3(maxX, maxY, minZ),
+        CS.UnityEngine.Vector3(minX, maxY, minZ),
+        CS.UnityEngine.Vector3(minX, minY, maxZ),
+        CS.UnityEngine.Vector3(maxX, minY, maxZ),
+        CS.UnityEngine.Vector3(maxX, maxY, maxZ),
+        CS.UnityEngine.Vector3(minX, maxY, maxZ)
+    }
+
+    -- Отрисовка (существующий код GL)
+    CS.UnityEngine.GL.PushMatrix()
+    CS.UnityEngine.GL.LoadProjectionMatrix(cam.projectionMatrix)
+    CS.UnityEngine.GL.modelview = cam.worldToCameraMatrix
+    
+    -- Смещение граней вперёд на 0.01 единицы по глубине
+local offsetZ = -0.01
+for i = 1, 8 do
+    corners[i] = corners[i] + cam.transform.forward * offsetZ
+end
+
+    -- === ОТРИСОВКА ПОЛУПРОЗРАЧНЫХ ГРАНЕЙ (как в превью) ===
+    CS.UnityEngine.GL.Begin(CS.UnityEngine.GL.TRIANGLES)
+    -- Полупрозрачный серый цвет для граней, прозрачность 0.2
+    CS.UnityEngine.GL.Color(CS.UnityEngine.Color(0, 0, 0, 0.2))
+
+    -- НИЖНИЙ КВАДРАТ (Z = minZ) — дно
+    CS.UnityEngine.GL.Vertex(corners[1])
+    CS.UnityEngine.GL.Vertex(corners[2])
+    CS.UnityEngine.GL.Vertex(corners[3])
+
+    CS.UnityEngine.GL.Vertex(corners[1])
+    CS.UnityEngine.GL.Vertex(corners[3])
+    CS.UnityEngine.GL.Vertex(corners[4])
+
+    -- ВЕРХНИЙ КВАДРАТ (Z = maxZ) — потолок
+    CS.UnityEngine.GL.Vertex(corners[5])
+    CS.UnityEngine.GL.Vertex(corners[8])
+    CS.UnityEngine.GL.Vertex(corners[7])
+
+    CS.UnityEngine.GL.Vertex(corners[5])
+    CS.UnityEngine.GL.Vertex(corners[7])
+    CS.UnityEngine.GL.Vertex(corners[6])
+
+    -- ЗАДНЯЯ ГРАНЬ (Y = maxY)
+    CS.UnityEngine.GL.Vertex(corners[3])
+    CS.UnityEngine.GL.Vertex(corners[4])
+    CS.UnityEngine.GL.Vertex(corners[8])
+
+    CS.UnityEngine.GL.Vertex(corners[3])
+    CS.UnityEngine.GL.Vertex(corners[8])
+    CS.UnityEngine.GL.Vertex(corners[7])
+
+    -- ПЕРЕДНЯЯ ГРАНЬ (Y = minY)
+    CS.UnityEngine.GL.Vertex(corners[2])
+    CS.UnityEngine.GL.Vertex(corners[6])
+    CS.UnityEngine.GL.Vertex(corners[5])
+
+    CS.UnityEngine.GL.Vertex(corners[2])
+    CS.UnityEngine.GL.Vertex(corners[5])
+    CS.UnityEngine.GL.Vertex(corners[1])
+
+    -- ЛЕВАЯ ГРАНЬ (X = minX)
+    CS.UnityEngine.GL.Vertex(corners[1])
+    CS.UnityEngine.GL.Vertex(corners[4])
+    CS.UnityEngine.GL.Vertex(corners[8])
+
+    CS.UnityEngine.GL.Vertex(corners[1])
+    CS.UnityEngine.GL.Vertex(corners[8])
+    CS.UnityEngine.GL.Vertex(corners[5])
+
+    -- ПРАВАЯ ГРАНЬ (X = maxX)
+    CS.UnityEngine.GL.Vertex(corners[2])
+    CS.UnityEngine.GL.Vertex(corners[6])
+    CS.UnityEngine.GL.Vertex(corners[7])
+
+    CS.UnityEngine.GL.Vertex(corners[2])
+    CS.UnityEngine.GL.Vertex(corners[7])
+    CS.UnityEngine.GL.Vertex(corners[3])
+
+    CS.UnityEngine.GL.End()
+
+    -- === ОТРИСОВКА КАРКАСА КОРОБКИ (фиолетовые линии) ===
+    CS.UnityEngine.GL.Begin(CS.UnityEngine.GL.LINES)
+    -- Фиолетовый цвет для линий каркаса
+    CS.UnityEngine.GL.Color(CS.UnityEngine.Color(0.435, 0, 1, 1))
+
+    -- Нижний квадрат
+    for _, pair in ipairs({{1,2},{2,3},{3,4},{4,1}}) do
+        CS.UnityEngine.GL.Vertex(corners[pair[1]])
+        CS.UnityEngine.GL.Vertex(corners[pair[2]])
+    end
+
+    -- Верхний квадрат
+    for _, pair in ipairs({{5,6},{6,7},{7,8},{8,5}}) do
+        CS.UnityEngine.GL.Vertex(corners[pair[1]])
+        CS.UnityEngine.GL.Vertex(corners[pair[2]])
+    end
+
+    -- Вертикальные линии
+    for i=1,4 do
+        CS.UnityEngine.GL.Vertex(corners[i])
+        CS.UnityEngine.GL.Vertex(corners[i+4])
+    end
+
+    CS.UnityEngine.GL.End()
+    CS.UnityEngine.GL.PopMatrix()
+end
+
+function InitializePreviewResources()
+    if isMeshInitialized then return end
+
+    -- Пытаемся получить встроенный меш куба
+    blockMesh = CS.UnityEngine.Resources.GetBuiltinResource(
+        typeof(CS.UnityEngine.Mesh),
+        "Cube"
+    )
+
+    -- Если не получилось, создаём временный куб (один раз!)
+    if not blockMesh then
+        local cube = CS.UnityEngine.GameObject.CreatePrimitive(CS.UnityEngine.PrimitiveType.Cube)
+        local meshFilter = cube:GetComponent(typeof(CS.UnityEngine.MeshFilter))
+        if meshFilter then
+            blockMesh = meshFilter.mesh
+        end
+        CS.UnityEngine.Object.DestroyImmediate(cube)
+    end
+
+    isMeshInitialized = true
+end
+
+function CreateCombinedBlockMeshChunks(blockDataList, maxBlocksPerChunk)
+    maxBlocksPerChunk = maxBlocksPerChunk or 1000
+    local chunks = {}
+
+    for i = 1, #blockDataList, maxBlocksPerChunk do
+        local chunkBlocks = {}
+        local endIndex = math.min(i + maxBlocksPerChunk - 1, #blockDataList)
+
+        for j = i, endIndex do
+            -- Сохраняем смещение относительно previewFirstPos (угла области)
+            local localOffset = blockDataList[j].offset - previewFirstPos
+            table.insert(chunkBlocks, {
+                offset = localOffset,
+                type = blockDataList[j].type  -- если нужно
+            })
+        end
+
+        local chunkMesh = CreateSingleChunkMesh(chunkBlocks)
+        if chunkMesh then
+            table.insert(chunks, {
+                mesh = chunkMesh,
+                offset = CS.UnityEngine.Vector3.zero  -- будет обновляться при повороте
+            })
+        end
+    end
+
+    print("Created " .. #chunks .. " chunks from " .. #blockDataList .. " blocks")
+    return chunks
+end
+
+function CreateSingleChunkMesh(blockDataList)
+    if not blockDataList or #blockDataList == 0 then return nil end
+
+    local vertices = {}
+    local triangles = {}
+
+    -- Базовый шаблон куба (8 вершин)
+    local cubeVertices = {
+        CS.UnityEngine.Vector3(0, 0, 0),  -- 0
+        CS.UnityEngine.Vector3(1, 0, 0),  -- 1
+        CS.UnityEngine.Vector3(1, 1, 0),  -- 2
+        CS.UnityEngine.Vector3(0, 1, 0),  -- 3
+        CS.UnityEngine.Vector3(0, 0, 1),  -- 4
+        CS.UnityEngine.Vector3(1, 0, 1),  -- 5
+        CS.UnityEngine.Vector3(1, 1, 1),  -- 6
+        CS.UnityEngine.Vector3(0, 1, 1)   -- 7
+    }
+
+    -- Индексы треугольников для всех 6 граней (порядок против часовой стрелки)
+    local cubeTriangles = {
+        -- Передняя грань (Z = 0)
+        0, 3, 2,
+        0, 2, 1,
+
+        -- Задняя грань (Z = 1)
+        5, 6, 7,
+        5, 7, 4,
+
+        -- Левая грань (X = 0)
+        4, 7, 3,
+        4, 3, 0,
+
+        -- Правая грань (X = 1)
+        1, 2, 6,
+        1, 6, 5,
+
+        -- Верхняя грань (Y = 1)
+        2, 3, 7,
+        2, 7, 6,
+
+        -- Нижняя грань (Y = 0)
+        4, 5, 1,
+        4, 1, 0
+    }
+
+    local vertexOffset = 0
+
+    for _, blockData in ipairs(blockDataList) do
+        if blockData and blockData.offset then
+            local x, y, z = blockData.offset.x, blockData.offset.y, blockData.offset.z
+
+            -- Добавляем вершины для этого блока (смещённые)
+            for _, v in ipairs(cubeVertices) do
+                table.insert(vertices, CS.UnityEngine.Vector3(v.x + x, v.y + y, v.z + z))
+            end
+
+            -- Добавляем индексы треугольников (с учётом смещения)
+            for i = 1, #cubeTriangles do
+                table.insert(triangles, cubeTriangles[i] + vertexOffset)
+            end
+
+            vertexOffset = vertexOffset + 8
+        else
+            print("Invalid block data found, skipping")
+        end
+    end
+
+    -- Создаём меш
+    local mesh = CS.UnityEngine.Mesh()
+    mesh.vertices = vertices
+    mesh.triangles = triangles
+    mesh:RecalculateNormals()
+
+    return mesh
+end
+
+function InitializePreviewMesh()
+    if isMeshInitialized or not previewBuildData or #previewBuildData == 0 then
+        return
+    end
+
+    combinedMeshChunks = CreateCombinedBlockMeshChunks(previewBuildData, 1000)
+
+    if combinedMeshChunks and #combinedMeshChunks > 0 then
+        isMeshInitialized = true
+
+        selectionMaterial = CS.UnityEngine.Material(CS.UnityEngine.Shader.Find("Standard"))
+        if selectionMaterial then
+            -- Основной цвет с прозрачностью (альфа = 0.4)
+            selectionMaterial.color = CS.UnityEngine.Color(0.28, 0.28, 0.28, 0.40)
+
+            -- Металлик: 0 — полностью неметаллический (пластик)
+            selectionMaterial:SetFloat("_Metallic", 0)
+
+            -- Гладкость: 0.1 — слегка матовая поверхность
+            selectionMaterial:SetFloat("_Glossiness", 0)
+
+            -- Режим рендеринга: прозрачный
+            selectionMaterial.renderQueue = CS.UnityEngine.Rendering.RenderQueue.Transparent
+
+            -- Включение альфа‑смешивания
+            selectionMaterial:EnableKeyword("_ALPHABLEND_ON")
+
+            -- Отключение записи в Z‑буфер (КРИТИЧНО для прозрачности)
+            selectionMaterial:SetInt("_ZWrite", 0)
+
+            -- Отсечение граней: отображаем обе стороны
+            selectionMaterial:SetInt("_Cull", CS.UnityEngine.Rendering.CullMode.Off)
+        end
+
+        -- МАТЕРИАЛ ДЛЯ ОБВОДКИ (чёрный, непрозрачный)
+        if not crossMaterial then
+            crossMaterial = CS.UnityEngine.Material(CS.UnityEngine.Shader.Find("Sprites/Default"))
+            if crossMaterial then
+                crossMaterial:SetInt("_SrcBlend", CS.UnityEngine.Rendering.BlendMode.SrcAlpha)
+                crossMaterial:SetInt("_DstBlend", CS.UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha)
+                crossMaterial:SetInt("_Cull", CS.UnityEngine.Rendering.CullMode.Off)
+                crossMaterial:SetInt("_ZWrite", 0)
+                crossMaterial:EnableKeyword("_ALPHABLEND_ON")
+            end
+        end
+    end
+end
+
+function UpdatePreviewMeshPosition(newAimPos, rotationAngle)
+    if not isMeshInitialized then return end
+
+
+    -- Сохраняем базовую позицию области
+    previewMeshTransform = newAimPos
+
+    -- Создаём кватернион поворота вокруг оси Y
+    local rotationQuaternion = CS.UnityEngine.Quaternion.Euler(0, rotationAngle, 0)
+
+    -- Сохраняем поворот для использования при отрисовке
+    previewMeshRotation = rotationQuaternion
+
+    -- Если угол поворота не равен 0, скрываем меш
+    showMeshWhenRotated = (rotationAngle == 0)
+end
+
+function CleanupPreviewMesh()
+    if combinedMeshChunks then
+        for _, chunk in ipairs(combinedMeshChunks) do
+            if chunk.mesh then
+                CS.UnityEngine.Object.DestroyImmediate(chunk.mesh)
+            end
+        end
+        combinedMeshChunks = nil
+    end
+    isMeshInitialized = false
+    previewMeshTransform = CS.UnityEngine.Vector3.zero
+    print("Preview mesh cleaned up")
+end
+
+function DrawBuildPreviewGL()
+    if not isPreviewVisible then return end
+    if not showBuildPreview or not previewFirstPos or not previewSecondPos then return end
+
+    local cam = CS.UnityEngine.Camera.current
+    if not cam then return end
+
+    InitializePreviewMesh()
+
+    if not selectionMaterial then
+        print("ERROR: selectionMaterial not initialized")
+        return
+    end
+
+    local passSuccess = selectionMaterial:SetPass(0)
+    if not passSuccess then return end
+
+    local aimPos = GetAimPoint()
+    if not aimPos then return end
+
+    local drawFirstPos = aimPos + previewFirstPos
+    local drawSecondPos = aimPos + previewSecondPos
+    local drawRotation = currentRotation
+
+    local rotatedFirstPos = drawFirstPos
+    local rotatedSecondPos = RotatePointAroundY(drawSecondPos, drawFirstPos, -drawRotation)
+
+    local minX = math.min(rotatedFirstPos.x, rotatedSecondPos.x)
+    local maxX = math.max(rotatedFirstPos.x, rotatedSecondPos.x) + 1
+    local minY = math.min(rotatedFirstPos.y, rotatedSecondPos.y)
+    local maxY = math.max(rotatedFirstPos.y, rotatedSecondPos.y) + 1
+    local minZ = math.min(rotatedFirstPos.z, rotatedSecondPos.z)
+    local maxZ = math.max(rotatedFirstPos.z, rotatedSecondPos.z) + 1
+
+    local corners = {
+        CS.UnityEngine.Vector3(minX, minY, minZ),
+        CS.UnityEngine.Vector3(maxX, minY, minZ),
+        CS.UnityEngine.Vector3(maxX, maxY, minZ),
+        CS.UnityEngine.Vector3(minX, maxY, minZ),
+        CS.UnityEngine.Vector3(minX, minY, maxZ),
+        CS.UnityEngine.Vector3(maxX, minY, maxZ),
+        CS.UnityEngine.Vector3(maxX, maxY, maxZ),
+        CS.UnityEngine.Vector3(minX, maxY, maxZ)
+    }
+
+    CS.UnityEngine.GL.PushMatrix()
+    CS.UnityEngine.GL.LoadProjectionMatrix(cam.projectionMatrix)
+    CS.UnityEngine.GL.modelview = cam.worldToCameraMatrix
+
+    -- Смещение граней вперёд на 0.01 единицы по глубине
+    local offsetZ = 0.01
+    for i = 1, 8 do
+        corners[i] = corners[i] + cam.transform.forward * offsetZ
+    end
+
+    -- ОТРИСОВКА МЕША (только если угол поворота равен 0)
+if previewBuildData and #previewBuildData > 0 and combinedMeshChunks and showMeshWhenRotated then
+    UpdatePreviewMeshPosition(aimPos, currentRotation)
+
+    if isMeshInitialized then
+        if selectionMaterial and selectionMaterial:SetPass(0) then
+            for _, chunk in ipairs(combinedMeshChunks) do
+                local worldPosition = aimPos + chunk.offset
+                local matrix = CS.UnityEngine.Matrix4x4.TRS(
+                    worldPosition,
+            previewMeshRotation,
+            CS.UnityEngine.Vector3.one
+        )
+        CS.UnityEngine.Graphics.DrawMesh(
+            chunk.mesh,
+            matrix,
+            selectionMaterial,
+            0,
+            nil,
+            0
+        )
+            end
+        end
+    end
+else
+    -- При повороте очищаем меш, но не удаляем ресурсы — только скрываем
+    -- CleanupPreviewMesh() не вызываем, чтобы не терять данные
+end
+
+    -- ОТРИСОВКА КАРКАСА КОРОБКИ (только линии, без граней)
+    if crossMaterial and crossMaterial:SetPass(0) then
+        CS.UnityEngine.GL.Begin(CS.UnityEngine.GL.LINES)
+        CS.UnityEngine.GL.Color(CS.UnityEngine.Color(0.2, 0.2, 0.2, 1))
+
+        -- Нижний квадрат
+        for _, pair in ipairs({{1,2},{2,3},{3,4},{4,1}}) do
+            CS.UnityEngine.GL.Vertex(corners[pair[1]])
+            CS.UnityEngine.GL.Vertex(corners[pair[2]])
+        end
+
+        -- Верхний квадрат
+        for _, pair in ipairs({{5,6},{6,7},{7,8},{8,5}}) do
+            CS.UnityEngine.GL.Vertex(corners[pair[1]])
+            CS.UnityEngine.GL.Vertex(corners[pair[2]])
+        end
+
+        -- Вертикальные линии
+        for i=1,4 do
+            CS.UnityEngine.GL.Vertex(corners[i])
+            CS.UnityEngine.GL.Vertex(corners[i+4])
+        end
+
+        CS.UnityEngine.GL.End()
+    else
+        print("WARNING: crossMaterial not available for outline drawing")
+    end
+
+    CS.UnityEngine.GL.PopMatrix()
+end
+
+
+function ClearUndoData()
+    -- Проверяем, не выполняется ли сейчас какое‑либо действие
+    if isPlacing or isDeleting or isReplacing then
+        Chat:AddMessage(
+            "Нельзя очистить историю: выполняется действие!",
+            "[f54949]"
+        )
+        return false
+    end
+
+    -- Безопасная очистка lastActionBlocks
+    if lastActionBlocks then
+        for k in pairs(lastActionBlocks) do
+            lastActionBlocks[k] = nil
+        end
+        lastActionBlocks = nil  -- явно обнуляем ссылку
+    end
+
+    --Chat:AddMessage("История отмены действий очищена.", "[a455f2]")
+    return true
+end
+
+function ClearSelectionAndReset()
+    -- Сброс точек выделения
+    FirstPos = nil
+    SecondPos = nil
+
+    -- Очистка скопированных данных
+    buildData.source = nil
+    buildData.blocks = {}
+
+    -- Сброс угла поворота
+    currentRotation = 0
+
+    --сброс всех флагов
+    isCopying = false
+    isDeleting = false
+    isFilling = false
+    isPlacing = false
+    isReplacing = false
+    isUndoing = false
+    isPasteInProgress = false
+
+    -- Сбрасываем индексы обработки
+    currentCopyChunkIndex = 1
+    currentBlockInCopyChunk = 1
+    currentDeleteIndex = 1
+    currentFillIndex = 1
+    currentPlaceIndex = 1
+    currentReplaceIndex = 1
+    currentChunkIndex = 1
+    currentBlockIndexInChunk = 1
+
+    -- Сброс статических данных
+    staticSelectionMode = false
+    staticFirstPos = nil
+    staticSecondPos = nil
+    originalFirstPos = nil
+    originalSecondPos = nil
+    allPositions = nil
+    existingBlocks = nil
+    blocksToPlace = nil
+    cachedBlocks = nil
+    blocksToDelete = nil
+    blocksToReplace = nil
+    chunks = nil
+    chunk = nil
+    undoChunks = nil
+    copyChunks = nil
+    originalRotation = 0
+    vertices = nil
+    triangles = nil
+
+     ClearUndoData()  -- вызываем новую функцию
+     collectgarbage()
+
+    -- Отключение превью
+    showBuildPreview = false
+    previewBuildData = nil
+    previewFirstPos = nil
+    previewSecondPos = nil
+
+    Chat:AddMessage("Область очищена.", "[a455f2]")
+end
+
+function ClearAllDataTables(showStats)
+    local stats = {}
+
+    -- Собираем статистику перед очисткой
+    if showStats then
+        stats.savedBuilds = #savedBuilds
+        stats.blocksToReplace = #blocksToReplace
+        stats.blocksToPlace = #blocksToPlace
+        stats.blocksToDelete = #blocksToDelete
+        stats.buildDataBlocks = #buildData.blocks
+    end
+
+    -- Очищаем таблицы
+    blocksToReplace = {}
+    blockKindNames = {}
+    blocksToPlace = {}
+    blocksToDelete = {}
+    buildData.source = nil
+    buildData.blocks = {}
+    buildData.previewBounds = nil
+
+    -- Выводим статистику, если нужно
+    if showStats then
+        local message = string.format(
+            ("Очищено: savedBuilds=%d, replace=%d, place=%d, delete=%d, buildData=%d"),
+            stats.savedBuilds,
+            stats.blocksToReplace,
+            stats.blocksToPlace,
+            stats.blocksToDelete,
+            stats.buildDataBlocks
+        )
+        Chat:AddMessage(message, "[a455f2]")
+end
+end
+
+function OnRenderObject()
+    if FirstPos and SecondPos then
+        -- Если обе точки установлены, рисуем выделение области
+        DrawSelectionBoxGL()
+    elseif showBuildPreview then
+        -- Если превью активно и выделение не идёт, рисуем превью
+        DrawBuildPreviewGL()
+    end
+
+    logsPrinted = false
+end
+
+function DisableBuildPreview()
+    showBuildPreview = false
+    previewBuildData = nil
+    previewFirstPos = nil
+    previewSecondPos = nil
+end
+
+function StopAllProcesses()
+    -- Сбрасываем все флаги процессов
+    isCopying = false
+    isDeleting = false
+    isFilling = false
+    isPlacing = false
+    isReplacing = false
+    isUndoing = false
+    isPasteInProgress = false
+
+    -- Сбрасываем индексы обработки
+    currentCopyChunkIndex = 1
+    currentBlockInCopyChunk = 1
+    currentDeleteIndex = 1
+    currentFillIndex = 1
+    currentPlaceIndex = 1
+    currentReplaceIndex = 1
+    currentChunkIndex = 1
+    currentBlockIndexInChunk = 1
+
+    -- Очищаем списки блоков для обработки (опционально — можно оставить для возможности продолжить позже)
+    blocksToDelete = {}
+    blocksToReplace = {}
+    blocksToPlace = {}
+    undoChunks = nil
+    copyChunks = nil
+
+    Chat:AddMessage("Текущий процесс остановлен.", "[f54949]")
+end
+
+function UpdateSelectionOffset()
+    if staticSelectionMode then
+        return  -- не обновляем смещение в статическом режиме
+    end
+
+    local curAimPos = GetAimPoint()
+    if not curAimPos or not FirstPos then
+        return
+    end
+    offset = curAimPos - FirstPos
+end
+
+function ToggleStaticSelectionMode()
+    staticSelectionMode = not staticSelectionMode
+
+    if staticSelectionMode then
+        -- Сохраняем изначальные координаты и угол поворота
+        if FirstPos and SecondPos then
+            originalFirstPos = FirstPos
+            originalSecondPos = SecondPos
+            originalRotation = currentRotation
+
+            -- Фиксируем область в изначальных координатах без поворота
+            staticFirstPos = originalFirstPos
+            staticSecondPos = originalSecondPos
+            currentRotation = 0  -- сбрасываем поворот для статического режима
+
+            Chat:AddMessage("Активирован статический режим. Сменить режим - [ " .. GetKeyName(areaModedKey) .. " ]", "[a455f2]")
+        else
+            --Chat:AddMessage("Не удалось активировать статический режим: область не выделена.", "[f54949]")
+            staticSelectionMode = false
+        end
+    else
+        -- При выключении статического режима восстанавливаем последний поворот
+        if originalFirstPos and originalSecondPos then
+            FirstPos = originalFirstPos
+            SecondPos = originalSecondPos
+            currentRotation = originalRotation
+        end
+        Chat:AddMessage("Активирован динамический режим. Сменить режим - [ " .. GetKeyName(areaModedKey) .. " ]", "[a455f2]")
+    end
+end
+
+function FindPlayerInput()
+    local playerInput = CS.UnityEngine.Object.FindObjectOfType(typeof(CS.PlayerInput))
+    if playerInput then
+        return playerInput
+    else
+        return nil
+    end
+end
+
+function FindPlayerMotor()
+    local playerMotor = CS.UnityEngine.Object.FindObjectOfType(typeof(CS.PlayerMotor))
+    if playerMotor then
+        return playerMotor
+    else
+        return nil
+    end
+end
+
+function HexToColor(hex)
+    -- Убираем символ "#" если есть
+    hex = hex:gsub("#", "")
+    -- Проверяем длину
+    if #hex ~= 6 then
+        error("Недопустимый HEX цвет: должен содержать 6 символов")
+    end
+    -- Получаем компоненты R, G, B в десятичном формате
+    local r = tonumber(hex:sub(1, 2), 16)
+    local g = tonumber(hex:sub(3, 4), 16)
+    local b = tonumber(hex:sub(5, 6), 16)
+    -- Переводим в значения от 0 до 1 и возвращаем цвет
+    return CS.UnityEngine.Color(r / 255, g / 255, b / 255, 1)
+end
+
+local buttonLabels = {
+    
+  mainMenu = { en = "Main", ru = "Главное Меню" }, --112233
+  BuildM = { en = "Building", ru = "Строительство" },
+  other = { en = "Other", ru = "Прочее" },
+  buildL = { en = "Build list", ru = "Список построек" },
+  updateList = { en = "Update list", ru = "Обновить список" },
+  Delete = { en = "Delete", ru = "Удалить" },
+  openFolder = { en = "Open folder", ru = "Открыть папку" },
+  menuBuild = { en = "Menu: Building", ru = "Меню: Строительство " },
+  menuBody = { en = "Menu: Other", ru = "Меню: Прочее" },
+  menuBind = { en = "Menu: Binds", ru = "Меню: Бинды" },
+  BindsM = { en = "Binds", ru = "Бинды" },
+  sendText = { en = "Send text", ru = "Отправить текст" },
+  fog = { en = "Fog", ru = "Туман" },
+  progressTime = { en = "Progress time", ru = "Течение времени" },
+  hour = { en = "Time: %d", ru = "Время: %d" },
+  language = { en = "Language: ", ru = "Язык: " },
+  languageStatus = { en = "En", ru = "Рус" },
+  instruct = { en = "Instruction", ru = "Инструкция" },
+  keyBuild = { en = "Build: [%s]", ru = "Строить: [%s]" },
+  keyDestroy = { en = "Destroy: [%s]", ru = "Ломать: [%s]" },
+  firstP = { en = "First pos: [%s]", ru = "Точка 1: [%s]" },
+  secP = { en = "Second pos: [%s]", ru = "Точка 2: [%s]" },
+  key = { en = "Key", ru = "Клавиша" },
+  build = { en = "Build", ru = "Строить" },
+  visible = { en = "Visibility structure ▶ %.2f", ru = "Видимость структуры ▶ %.2f" },
+
+  --для биндов бля
+  keyTeleport = { en = "Teleport: [%s]", ru = "Телепорт: [%s]" },
+  keyNoclip = { en = "Noclip: [%s]", ru = "Коллизия: [%s]" },
+  keyUnBlock = { en = "Under block: [%s]", ru = "Блок под собой: [%s]" },
+  keyArMode = { en = "Switch area mode: [%s]", ru = "Смена режима области: [%s]" },
+  keyDelArea = { en = "Start destroy: [%s]", ru = "Запуск удаления: [%s]" },
+  keyCopArea = { en = "Copy area: [%s]", ru = "Копирование области: [%s]" },
+  keyPasArea = { en = "Start build: [%s]", ru = "Вставка области: [%s]" },
+  keyRepArea = { en = "Start replace: [%s]", ru = "Запуск замены: [%s]" },
+  keyFillArea = { en = "Start fill: [%s]", ru = "Запуск заполнения: [%s]" },
+  keyUndoAct = { en = "Undo action: [%s]", ru = "Отмена действия: [%s]" },
+  keyStopPr = { en = "Stop process: [%s]", ru = "Остановка процесса: [%s]" },
+  keyClear = { en = "Clear area: [%s]", ru = "Сброс области: [%s]" },
+  keyRotLeft = { en = "Rotate left: [%s]", ru = "Поворот влево: [%s]" },
+  keyRotRight = { en = "Rotate right: [%s]", ru = "Поворот вправо: [%s]" },
+  keydraw = { en = "on/off rendering [%s]", ru = "вкл/выкл отрисовку [%s]" },
+  asskey = { en = "Assign the required keys:", ru = "Назначь нужные клавиши:" },
+  ResetBinds = { en = "Reset binds", ru = "Сбросить бинды" },
+
+  destroy = { en = "Destroy", ru = "Ломать" },
+  copy = { en = "Сopy mode", ru = "Режим копирования" },
+  copyAr = { en = "Copy area", ru = "Скопировать Область" },
+  startB = { en = "Start build", ru = "Вставить Область" },
+  startD = { en = "Start destroy", ru = "Удалить блоки" },
+  startR = { en = "Start replace", ru = "Заменить блоки" },
+  startF = { en = "Start fill area", ru = "Заполнить область" },
+  undo = { en = "Undo last action", ru = "Отмена действия" },
+  clear = { en = "Clear", ru = "Очистить" },
+  stopP = { en = "Stop process", ru = "Остановить процесс" },
+  rot1 = { en = "Rotate left", ru = "Повернуть влево" },
+  rot2 = { en = "Rotate right", ru = "Повернуть вправо" },
+  save = { en = "Save", ru = "Сохранить" },
+  list = { en = "Menu: BuildList", ru = "Меню: Постройки" },
+  speed = { en = "Speed", ru = "Скорость" },
+  noclip = { en = "Noclip", ru = "Коллизия" },
+  tp = { en = "Teleport", ru = "Телепорт" },
+  fly = { en = "Fly", ru = "Полет" },
+  spAxe = { en = "Build speed", ru = "Скорость кирки" },
+  distAxe = { en = "Raycast distance", ru = "Дистанция кирки" },
+  previewToggle = { en = "Show preview", ru = "Показать превью" },
+  previewHide = { en = "Hide preview", ru = "Скрыть превью"},
+  logs = {en = "logs", ru = "логи"},
+  deleteModeAll = { en = "All blocks", ru = "Все блоки"},
+  deleteModeSelected = { en = "Selected type", ru = "Выбранный тип"},
+  deleteModes = { en = "Delete mode:", ru = "Режим удаления:"},
+  buildDestroyModeSingle = { en = "Hold mode", ru = "Режим удержания" },
+  buildDestroyModeDual = { en = "Click mode", ru = "Режим клика" },
+  replaceTextureOnly = { en = "Texture only", ru = "Только текстура" },
+  replaceFull = { en = "Type + shape", ru = "Тип + форма" },
+  replaceModeLabel = { en = "Replace mode:", ru = "Режим замены:" },
+  deleteTabOpen = { en = "Tab: «Delete»", ru = "Вкладка: «Удаление»" },
+  deleteTabClose = { en = "Hide tab «Delete»", ru = "Скрыть вкладку «Удаление»" },
+  replaceTabOpen = { en = "Tab: «Replace»", ru = "Вкладка: «Замена»" },
+  replaceTabClose = { en = "Hide tab 'Replace»", ru = "Скрыть вкладку «Замена»" },
+  resetwin = {en = "Reset window", ru = "Сброс окон"}
+}
+
+function toggleLanguage()
+  if uiLanguage == "en" then
+    uiLanguage = "ru"
+  else
+    uiLanguage = "en"
+  end
+end
+
+function WindowFunction(id)
+    GUILayout.BeginVertical()
+    GUILayout.Space(20) 
+
+    GUILayout.BeginHorizontal() showBuildWindow = GUILayout.Toggle(showBuildWindow, "", customSkins.toggle) GUILayout.Space(5) GUILayout.Label(buttonLabels.menuBuild[uiLanguage], customSkins.label) GUILayout.EndHorizontal() GUILayout.Space(5)
+    GUILayout.BeginHorizontal() showBuildListWindow = GUILayout.Toggle(showBuildListWindow, "", customSkins.toggle) GUILayout.Space(5) GUILayout.Label(buttonLabels.list[uiLanguage], customSkins.label) GUILayout.EndHorizontal() GUILayout.Space(5)
+    GUILayout.BeginHorizontal() showBindWindow = GUILayout.Toggle(showBindWindow, "", customSkins.toggle) GUILayout.Space(5) GUILayout.Label(buttonLabels.menuBind[uiLanguage], customSkins.label) GUILayout.EndHorizontal() GUILayout.Space(5)
+    GUILayout.BeginHorizontal() showBodyWindow = GUILayout.Toggle(showBodyWindow, "", customSkins.toggle) GUILayout.Space(5) GUILayout.Label(buttonLabels.menuBody[uiLanguage], customSkins.label) GUILayout.EndHorizontal() GUILayout.Space(5)
+
+    inputText = GUILayout.TextField(inputText, 200, customSkins.textField, GUILayout.Width(250)) GUILayout.Space(5)
+
+    if GUILayout.Button("<b>" .. buttonLabels.sendText[uiLanguage] .. "</b>", customSkins.button) then
+        Chat:SendMessage(inputText)
+    end
+
+    GUILayout.Space(5)
+
+    local fogLabel = bFog and "<color=#8161ff><b>●</b></color>" or "<color=#5b5b5c><b>●</b></color>"
+    if GUILayout.Button("<b>" .. buttonLabels.fog[uiLanguage] .. "</b> " .. fogLabel, customSkins.button) then
+        bFog = not bFog
+        CS.UnityEngine.RenderSettings.fog = bFog
+    end
+
+    GUILayout.Space(5)
+
+    local progressLabel = isProgressing and "<color=#8161ff><b>●</b></color>" or "<color=#5b5b5c><b>●</b></color>"
+    if GUILayout.Button("<b>" .. buttonLabels.progressTime[uiLanguage] .. "</b> " .. progressLabel, customSkins.button) then
+        isProgressing = not isProgressing
+        Skybox.ProgressTime = isProgressing
+    end
+
+    GUILayout.Space(5)
+
+    GUILayout.Label(string.format(buttonLabels.hour[uiLanguage], math.floor(currentHour)), customSkins.label) GUILayout.Space(5)
+
+    currentHour = Skybox.Hour
+    local oldHour = currentHour
+    currentHour = GUILayout.HorizontalSlider(currentHour, 0, 24, customSkins.horizontalSlider, customSkins.horizontalSliderThumb) GUILayout.Space(10)
+
+    -- Проверяем, изменилось ли значение из‑за действия пользователя
+if math.abs(currentHour - oldHour) > 0.01 then
+    isUserControlling = true
+    lastUserHour = currentHour
+    Skybox.Hour = currentHour  
+end
+
+    if GUILayout.Button("<b>" .. buttonLabels.resetwin[uiLanguage] .. "</b>", customSkins.button) then
+        ResetWindowPositions()
+    end
+
+    GUILayout.Space(5)
+
+    if GUILayout.Button("<b>" .. buttonLabels.language[uiLanguage] .. " " .. buttonLabels.languageStatus[uiLanguage] .. "</b>", customSkins.button) then
+    toggleLanguage()
+end
+
+GUILayout.Space(5)
+
+   -- toggleChangeBlock = GUILayout.Toggle(toggleChangeBlock, "Rainbow")
+
+    -- Если включён — вызываем функцию смены блока каждый кадр (чтобы каждый кадр был вызов)
+    if toggleChangeBlock then
+     --   SetRandomBlockUnderPlayer()
+    end
+
+
+    if GUILayout.Button("<b>" .. buttonLabels.instruct[uiLanguage] .. "</b>", customSkins.button) then
+    CS.UnityEngine.Application.OpenURL("https://drive.google.com/drive/folders/16xoTdQLPMkafo44qlC6tWrq6YjUra1CP?usp=drive_link")
+end
+
+GUILayout.Space(10)
+
+GUILayout.BeginHorizontal() GUILayout.Space(220) GUILayout.Label("<color=#464447>©cry</color>", customSkins.label) GUILayout.EndHorizontal()
+
+    GUILayout.EndVertical()
+    GUI.DragWindow()
+end
+
+function BuildWindowFunction(id)
+
+    GUILayout.Space(20)
+
+   scrollPosition = GUILayout.BeginScrollView(scrollPosition, customSkins.horizontalScrollbarThumb, customSkins.verticalScrollbarThumb, GUILayout.Width(250), GUILayout.Height(400))
+
+    GUILayout.BeginVertical()
+
+GUILayout.BeginHorizontal()
+
+if isInitialized then
+
+    CreateBindButton("placeBlocks", placeBlocksKey, buttonLabels.keyBuild[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("destBlocks", destBlocksKey, buttonLabels.keyDestroy[uiLanguage])
+
+    GUILayout.EndHorizontal()
+
+    GUILayout.Space(5)
+
+    GUILayout.BeginHorizontal()
+
+    CreateBindButton("firstPos", firstPosKey, buttonLabels.firstP[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("secondPos", secondPosKey, buttonLabels.secP[uiLanguage])
+
+end
+
+GUILayout.EndHorizontal() 
+
+GUILayout.Space(10)
+
+GUILayout.Box("", customSkins.box, GUILayout.ExpandWidth(true), GUILayout.Height(5))
+
+GUILayout.Space(10)  
+
+    GUILayout.BeginHorizontal()
+    if GUILayout.Button(placeBlocksMode and "<b>" .. buttonLabels.build[uiLanguage] .. "</b>" .. "<b><color=#8161ff> ●</color></b>" or "<b>" .. buttonLabels.build[uiLanguage] .. "</b>" .. "<b><color=#5b5b5c> ●</color></b>", customSkins.button) then
+    placeBlocksMode = not placeBlocksMode
+end
+
+GUILayout.Space(5)  
+
+if GUILayout.Button(destBlocksMode and "<b>" .. buttonLabels.destroy[uiLanguage] .. "</b>" .. "<b><color=#8161ff> ●</color></b>" or "<b>" .. buttonLabels.destroy[uiLanguage] .. "</b>" .. "<b><color=#5b5b5c> ●</color></b>", customSkins.button) then
+    destBlocksMode = not destBlocksMode
+end
+
+    GUILayout.EndHorizontal()
+
+-- Кнопка переключения единого режима для постройки и удаления
+local modeButtonText
+if buildDestroyMode == "hold" then
+    modeButtonText = buttonLabels.buildDestroyModeSingle[uiLanguage] or buttonLabels.buildDestroyModeSingle.ru
+else
+    modeButtonText = buttonLabels.buildDestroyModeDual[uiLanguage] or buttonLabels.buildDestroyModeDual.ru
+end
+
+GUILayout.Space(5)
+
+if GUILayout.Button("<b>" .. modeButtonText .. "</b>", customSkins.button) then
+    ToggleBuildDestroyMode()
+end
+GUILayout.Space(5)  -- Небольшой отступ перед слайдерами
+    
+
+        GUILayout.Label("X = ".. math.floor(blocksCountX) .. " ", customSkins.label, GUILayout.Width(50)) GUILayout.Space(5)
+        blocksCountX = GUILayout.HorizontalSlider(blocksCountX, 1, 50, customSkins.horizontalSlider, customSkins.horizontalSliderThumb) GUILayout.Space(5)
+
+        GUILayout.Label("Y = " .. math.floor(blocksCountY) .. " ", customSkins.label, GUILayout.Width(50)) GUILayout.Space(5)
+        blocksCountY = GUILayout.HorizontalSlider(blocksCountY, 1, 50, customSkins.horizontalSlider, customSkins.horizontalSliderThumb) GUILayout.Space(5)
+        
+        GUILayout.Label("Z = " .. math.floor(blocksCountZ) .. " ", customSkins.label, GUILayout.Width(50)) GUILayout.Space(5)
+        blocksCountZ = GUILayout.HorizontalSlider(blocksCountZ, 1, 50, customSkins.horizontalSlider, customSkins.horizontalSliderThumb)
+
+        GUILayout.Space(10)  
+
+        GUILayout.Box("", customSkins.box, GUILayout.ExpandWidth(true), GUILayout.Height(5))
+
+        GUILayout.Space(10)  
+
+    -- Новый тумблер для выделения области
+   if GUILayout.Button(selectAreaMode and "<b>" .. buttonLabels.copy[uiLanguage] .. "</b>" .. "<b><color=#8161ff> ●</color></b>" or "<b>" .. buttonLabels.copy[uiLanguage] .. "</b>" .. "<b><color=#5b5b5c> ●</color></b>", customSkins.button) then
+    selectAreaMode = not selectAreaMode
+    if not selectAreaMode then
+        -- Останавливаем все активные функции копирования/пастинга
+        isDeleting = false
+        isReplacing = false
+        isPlacing = false
+        isFilling = false
+        isUndoing = false
+    end
+end
+
+GUILayout.Space(5)
+    
+if GUILayout.Button("<b>" .. buttonLabels.copyAr[uiLanguage] .. "</b>", customSkins.button) then
+    CopySelection()
+end
+
+GUILayout.Space(5)
+
+-- Кнопка "Вставить область" — тускнеет, если идёт копирование или вставка
+local canPaste = not isCopying and not isPasteInProgress
+GUI.enabled = canPaste
+
+-- Настраиваем цвет: тусклый при блокировке, нормальный при доступности
+if canPaste then
+    -- Оставляем цвет по умолчанию (не меняем backgroundColor)
+else
+    GUI.backgroundColor = CS.UnityEngine.Color(0.5, 0.5, 0.5, 0.3)  -- серый полупрозрачный (неактивная)
+end
+
+if GUILayout.Button("<b>" .. buttonLabels.startB[uiLanguage] .. "</b>", customSkins.button) then
+    StartPasting()
+end
+
+GUILayout.Space(5)
+
+GUI.enabled = true  -- восстанавливаем состояние GUI для следующих элементов
+
+-- КНОПКА-ВКЛАДКА: Удаление
+local tabButtonText
+if isDeleteTabOpen then
+    tabButtonText = buttonLabels.deleteTabClose[uiLanguage] or buttonLabels.deleteTabClose.ru
+else
+    tabButtonText = buttonLabels.deleteTabOpen[uiLanguage] or buttonLabels.deleteTabOpen.ru
+end
+
+if GUILayout.Button("<b>" .. tabButtonText .. "</b>", customSkins.button,  GUILayout.ExpandWidth(true)) then
+    isDeleteTabOpen = not isDeleteTabOpen
+end
+
+GUILayout.Space(5)
+
+-- БЛОК УДАЛЕНИЯ: показывается только если вкладка открыта
+if isDeleteTabOpen then
+
+    GUILayout.Space(5)
+
+    GUILayout.Box("", customSkins.box, GUILayout.ExpandWidth(true), GUILayout.Height(5))
+
+    GUILayout.Space(10)
+
+    if GUILayout.Button("<b>" .. buttonLabels.startD[uiLanguage] .. "</b>", customSkins.button) then
+        StartDestroy()
+    end
+
+    GUILayout.Space(5)
+
+    local deleteModeLabelText = buttonLabels.deleteModes[uiLanguage] or buttonLabels.deleteModes.ru
+    GUILayout.Label("" .. deleteModeLabelText .. "", customSkins.label)  -- без фиксированной ширины
+
+    GUILayout.Space(5)  -- небольшой фиксированный отступ
+
+
+    local deleteModeButtonText
+    if deleteMode == "all" then
+        deleteModeButtonText = buttonLabels.deleteModeAll[uiLanguage] or buttonLabels.deleteModeAll.ru
+    else
+        deleteModeButtonText = buttonLabels.deleteModeSelected[uiLanguage] or buttonLabels.deleteModeSelected.ru
+    end
+
+    if GUILayout.Button("<b>" .. deleteModeButtonText .. "</b>", customSkins.button) then
+        ToggleDeleteMode()
+    end
+
+    GUILayout.Space(10)
+
+    GUILayout.Box("", customSkins.box, GUILayout.ExpandWidth(true), GUILayout.Height(5))
+
+    GUILayout.Space(10)
+end
+
+GUI.backgroundColor = HexToColor("fafafa")
+
+-- КНОПКА-ВКЛАДКА: Замена
+local tabButtonText
+if isReplaceTabOpen then
+    tabButtonText = buttonLabels.replaceTabClose[uiLanguage] or buttonLabels.replaceTabClose.ru
+else
+    tabButtonText = buttonLabels.replaceTabOpen[uiLanguage] or buttonLabels.replaceTabOpen.ru
+end
+
+
+if GUILayout.Button("" .. tabButtonText .. "", customSkins.button, GUILayout.ExpandWidth(true)) then
+    isReplaceTabOpen = not isReplaceTabOpen
+end
+
+-- БЛОК ЗАМЕНЫ
+if isReplaceTabOpen then
+
+    GUILayout.Space(10)
+
+    GUILayout.Box("", customSkins.box, GUILayout.ExpandWidth(true), GUILayout.Height(5))
+
+    GUILayout.Space(10)
+
+    if GUILayout.Button("" .. buttonLabels.startR[uiLanguage] .. "", customSkins.button) then
+        StartReplacing()
+    end
+
+    GUILayout.Space(5)
+
+    local modeLabelText = buttonLabels.replaceModeLabel[uiLanguage] or buttonLabels.replaceModeLabel.ru
+    GUILayout.Label("" .. modeLabelText .. "", customSkins.label)
+
+    GUILayout.Space(5)
+
+    local modeButtonText
+    if replaceMode == "texture" then
+        modeButtonText = buttonLabels.replaceTextureOnly[uiLanguage] or buttonLabels.replaceTextureOnly.ru
+    else
+        modeButtonText = buttonLabels.replaceFull[uiLanguage] or buttonLabels.replaceFull.ru
+    end
+
+    if GUILayout.Button("" .. modeButtonText .. "", customSkins.button) then
+        ToggleReplaceMode()
+    end
+
+    GUILayout.Space(10)
+
+    GUILayout.Box("", customSkins.box, GUILayout.ExpandWidth(true), GUILayout.Height(5))
+
+    GUILayout.Space(10)
+end
+
+GUILayout.Space(5)
+
+if GUILayout.Button("<b>" .. buttonLabels.startF[uiLanguage] .. "</b>", customSkins.button) then
+    StartFilling()
+end
+
+GUILayout.Space(5)
+
+if GUILayout.Button("<b>" .. buttonLabels.undo[uiLanguage] .. "</b>", customSkins.button) then
+    StartUndo()
+end
+
+GUILayout.Space(5)
+
+if GUILayout.Button("<b>" .. buttonLabels.stopP[uiLanguage] .. "</b>", customSkins.button) then
+    StopAllProcesses()
+end
+
+GUILayout.Space(5)
+
+if GUILayout.Button("<b>" .. buttonLabels.clear[uiLanguage] .. "</b>", customSkins.button) then
+    ClearSelectionAndReset()
+    ClearAllDataTables()
+end
+
+GUILayout.Space(5)
+
+    -- Добавляем кнопки поворота
+    GUILayout.BeginHorizontal()
+    if GUILayout.Button("<b>" .. buttonLabels.rot1[uiLanguage] .. "</b>", customSkins.button) then
+        RotateCopiedBlocksLeft()
+    end
+
+    GUILayout.Space(5)
+
+    if GUILayout.Button("<b>" .. buttonLabels.rot2[uiLanguage] .. "</b>", customSkins.button) then
+        RotateCopiedBlocksRight()
+    end
+    GUILayout.EndHorizontal()
+
+    GUILayout.Space(5)
+
+    GUILayout.Label("OneFrame = " .. deleteSpeed .. "", customSkins.label, GUILayout.Width(90))
+
+    GUILayout.Space(5)
+
+    deleteSpeed = math.floor(GUILayout.HorizontalSlider(deleteSpeed, 1, 24, customSkins.horizontalSlider, customSkins.horizontalSliderThumb))
+
+     GUILayout.Space(10)
+
+    inputFileName = inputFileName or "name"
+    inputFileName = GUILayout.TextField(inputFileName, 25, customSkins.textField, GUILayout.Width(250));
+
+    GUILayout.Space(5)
+
+    if GUILayout.Button("<b>" .. buttonLabels.save[uiLanguage] .. "</b>", customSkins.button) then
+    if inputFileName ~= "" then
+        local bytes = {}
+        for i = 1, #inputFileName do
+            table.insert(bytes, tostring(string.byte(inputFileName, i)))
+        end
+       -- Chat:AddMessage("Bytes of filename: " .. table.concat(bytes, " "), "[00ff00]")
+        SaveSelectionToFile(inputFileName .. ".json")
+    else
+        Chat:AddMessage("Введи имя файла для сохранения!", "[f54949]")
+    end
+
+    GUILayout.Space(5)
+end
+
+GUI.backgroundColor = HexToColor("fafafa")
+
+GUILayout.Space(10)
+
+GUILayout.BeginHorizontal() 
+
+    GUILayout.BeginHorizontal() showLogsInChat = GUILayout.Toggle(showLogsInChat, "", customSkins.toggle) GUILayout.Space(5) GUILayout.Label(buttonLabels.logs[uiLanguage], customSkins.label) GUILayout.EndHorizontal() GUILayout.Space(5)
+
+GUILayout.EndHorizontal()
+    
+    GUILayout.EndVertical()
+    GUILayout.EndScrollView()
+    GUI.DragWindow()
+end
+
+function BuildListWindowFunction(id)
+
+    GUILayout.Space(20)
+
+    scrollPosition2 = GUILayout.BeginScrollView(scrollPosition2, customSkins.horizontalScrollbarThumb, customSkins.verticalScrollbarThumb, GUILayout.Width(250), GUILayout.Height(400))
+    GUILayout.BeginVertical()
+
+    local myColor = HexToColor("fafafa")
+    GUI.backgroundColor = myColor
+
+    if GUILayout.Button("<b>" .. buttonLabels.updateList[uiLanguage] .. "</b>", customSkins.button) then
+        UpdateSavedBuildsList()
+        selectedBuildFileName = nil
+        showBuildPreview = false  -- сбрасываем превью при обновлении списка
+    end
+
+    GUILayout.Space(5)
+    
+if GUILayout.Button("<b>" .. buttonLabels.openFolder[uiLanguage] .. "</b>", customSkins.button) then
+    local path = buildsFolder
+    OpenFolder(path)
+end
+GUI.backgroundColor = myColor
+
+GUILayout.Space(5)
+
+    -- Определяем, можно ли удалить выбранную постройку
+    local canDelete = false
+    if selectedBuildFileName ~= nil then
+        local decodedName = decode_filename(selectedBuildFileName)
+        canDelete = not containsRussian(decodedName)
+    end
+
+    -- Кнопка Delete (активна только если можно удалить)
+    GUI.enabled = canDelete
+    GUI.backgroundColor = canDelete and CS.UnityEngine.Color(1, 0.56, 0.56, 1) or myColor
+    if GUILayout.Button("<b>" .. buttonLabels.Delete[uiLanguage] .. "</b>", customSkins.button) then
+        local filePath = buildsFolder .. "/" .. selectedBuildFileName
+        local success, err = os.remove(filePath)
+        if success then
+           Chat:AddMessage("Постройка '" .. decode_filename(selectedBuildFileName) .. "' удалена.", "[a455f2]")
+            UpdateSavedBuildsList()
+            selectedBuildFileName = nil
+            showBuildPreview = false  -- скрываем превью после удаления
+        else
+           LogChatMessage("Ошибка при удалении: " .. tostring(err), "[f54949]")
+        end
+    end
+    GUI.enabled = true
+    GUI.backgroundColor = myColor
+
+    GUILayout.Space(5)
+    
+    -- Формируем текст и цвет кнопки
+local previewButtonText
+if showBuildPreview then
+    previewButtonText = buttonLabels.previewHide[uiLanguage] or buttonLabels.previewHide.ru
+else
+    previewButtonText = buttonLabels.previewToggle[uiLanguage] or buttonLabels.previewToggle.ru
+end
+local previewButtonColor = showBuildPreview and CS.UnityEngine.Color(0.75, 0.75, 1, 1) or HexToColor("fafafa")
+GUI.backgroundColor = previewButtonColor
+
+-- Отрисовка кнопки
+if GUILayout.Button("<b>" .. previewButtonText .. "</b>", customSkins.button) then
+    if showBuildPreview then
+        -- Скрываем превью и очищаем ВСЕ данные
+        showBuildPreview = false
+        previewBuildData = nil
+        previewFirstPos = nil
+        previewSecondPos = nil
+        selectedBuildFileName = nil  -- сбрасываем выбор файла
+
+        -- Принудительно вызываем сборщик мусора
+        collectgarbage("collect")
+    else
+        -- Показываем превью
+        if selectedBuildFileName then
+            LoadBuildFromFile(decode_filename(selectedBuildFileName))
+            CalculatePreviewBounds()
+            showBuildPreview = true
+        else
+            Chat:AddMessage("Сначала выбери постройку из списка!", "[f54949]")
+        end
+    end
+end
+    GUI.backgroundColor = myColor
+
+    --[[GUILayout.Label(string.format("<b>" .. buttonLabels.visible[uiLanguage] .. "</b>", (alphaValue)))
+
+    -- Горизонтальный слайдер для регулировки альфа‑канала
+    alphaValue = GUILayout.HorizontalSlider(alphaValue, 0.0, 1.0)
+
+    -- Применяем новое значение прозрачности к материалу
+    if selectionMaterial then
+        local currentColor = selectionMaterial.color
+        selectionMaterial.color = CS.UnityEngine.Color
+            (currentColor.r, currentColor.g, currentColor.b, alphaValue)
+    end]]
+
+   GUILayout.Space(10)
+
+    GUILayout.Box("", customSkins.box, GUILayout.ExpandWidth(true), GUILayout.Height(5))
+
+    GUILayout.Space(10)
+    
+   -- Список сохранённых построек
+for i, encodedFileName in ipairs(savedBuilds) do
+    local decodedFileName = decode_filename(encodedFileName)
+    local nameWithoutExt = decodedFileName:gsub("%.json$", "")
+    local boldName = "<b>" .. nameWithoutExt .. "</b>"
+
+    if encodedFileName == selectedBuildFileName then
+        GUI.backgroundColor = HexToColor("9d9cff")
+    else
+        GUI.backgroundColor = myColor
+    end
+
+    if GUILayout.Button(boldName, customSkins.button) then
+        -- Сначала сбрасываем старые данные
+        previewBuildData = nil
+        previewFirstPos = nil
+        previewSecondPos = nil
+        showBuildPreview = false  -- скрываем превью на время загрузки
+        showMeshWhenRotated = true
+
+        -- Сохраняем имя выбранного файла
+        selectedBuildFileName = encodedFileName
+
+        -- Загружаем новую постройку
+        LoadBuildFromFile(decodedFileName)
+
+        -- После загрузки обновляем границы превью
+        CalculatePreviewBounds()
+
+        -- Синхронизируем видимость превью с текущим состоянием
+        if isPreviewButtonActive and not selectAreaMode then
+            showBuildPreview = true
+        end
+    end
+
+    GUILayout.Space(5)
+
+end
+
+    GUI.backgroundColor = myColor
+
+    GUILayout.EndVertical()
+    GUILayout.EndScrollView()
+    GUI.DragWindow()
+end
+
+function BodyWindowFunction(id)
+
+    GUILayout.Space(20)
+
+    local myColor = HexToColor("fafafa")
+    GUI.backgroundColor = myColor 
+
+    GUILayout.BeginVertical()
+
+
+        if GUILayout.Button(speedToggle and "<b>" .. buttonLabels.speed[uiLanguage] .. "</b>" .. "<b><color=#8161ff> ●</color></b>" or "<b>" .. buttonLabels.speed[uiLanguage] .. "</b>" .. "<b><color=#5b5b5c> ●</color></b>", customSkins.button) then
+            speedToggle = not speedToggle
+        end
+
+        GUILayout.Space(5)
+
+        local displaySpeed = math.floor(speedModifier + 0.5)
+
+                GUILayout.Label(buttonLabels.speed[uiLanguage] .. " = " .. displaySpeed, customSkins.label, GUILayout.Width(100))
+
+                GUILayout.Space(5)
+
+            speedModifier = GUILayout.HorizontalSlider(speedModifier, 1, 10, customSkins.horizontalSlider, customSkins.horizontalSliderThumb) GUILayout.Space(10)
+            GUI.backgroundColor = myColor 
+
+
+    if GUILayout.Button(noclipToggle and "<b>" .. buttonLabels.noclip[uiLanguage] .. "</b>" .. "<b><color=#8161ff> ●</color></b>" or "<b>" .. buttonLabels.noclip[uiLanguage] .. "</b>" .. "<b><color=#5b5b5c> ●</color></b>", customSkins.button) then
+    noclipToggle = not noclipToggle
+
+    -- При выключении toggle сразу отключаем noclipActive и включаем коллизии
+    if not noclipToggle then
+        noclipActive = false
+        local playerLayer = 2
+        local terrainLayer = CS.UnityEngine.LayerMask.NameToLayer("Terrain")
+        local entityLayer = CS.UnityEngine.LayerMask.NameToLayer("Entity")
+
+        CS.UnityEngine.Physics.IgnoreLayerCollision(playerLayer, terrainLayer, false)
+        CS.UnityEngine.Physics.IgnoreLayerCollision(playerLayer, entityLayer, false)
+        print("Noclip toggled OFF, noclip disabled")
+    else
+        -- Выводим сообщение в чат только при включении ноуклипа
+        Chat:AddMessage("Чтобы Включить/Выключить Коллизию нажми: " .. GetKeyName(noclipKey), "[a455f2]")
+    end
+end
+
+GUILayout.Space(5)
+
+    if GUILayout.Button(teleportToggle and "<b>" .. buttonLabels.tp[uiLanguage] .. "</b>" .. "<b><color=#8161ff> ●</color></b>" or "<b>" .. buttonLabels.tp[uiLanguage] .. "</b>" .. "<b><color=#5b5b5c> ●</color></b>", customSkins.button) then
+    teleportToggle = not teleportToggle
+
+    -- Выводим сообщение только при включении (когда teleportToggle стал true)
+    if teleportToggle then
+        Chat:AddMessage("Чтобы телепортироваться нажми: " .. GetKeyName(teleportKey), "[a455f2]")
+    end
+end
+
+GUILayout.Space(5)
+
+    if GUILayout.Button(flyToggle and "<b>" .. buttonLabels.fly[uiLanguage] .. "</b>" .. "<b><color=#8161ff> ●</color></b>" or "<b>" .. buttonLabels.fly[uiLanguage] .. "</b>" .. "<b><color=#5b5b5c> ●</color></b>", customSkins.button) then
+        flyToggle = not flyToggle
+    end
+
+    if buildSpeedToggle == nil then
+    buildSpeedToggle = false  -- начальное состояние
+end
+
+GUILayout.Space(5)
+
+if GUILayout.Button(buildSpeedToggle and "<b>" .. buttonLabels.spAxe[uiLanguage] .. "</b>" .. "<b><color=#8161ff> ●</color></b>" or "<b>" .. buttonLabels.spAxe[uiLanguage] .. "</b>" .. "<b><color=#5b5b5c> ●</color></b>", customSkins.button) then
+    buildSpeedToggle = not buildSpeedToggle
+    Player:BuildAndHitSpeedUp(buildSpeedToggle)
+end
+
+GUILayout.Space(5)
+
+    -- Изначальное значение дистанции взаимодействия
+if not currentDistance then
+    currentDistance = Player.RaycastDistance
+end
+
+local displayedDistance = math.floor(currentDistance + 0.5)
+
+GUILayout.Label(buttonLabels.distAxe[uiLanguage] .. " = ".. displayedDistance, customSkins.label, GUILayout.Width(150))
+
+GUILayout.Space(5)
+
+currentDistance = GUILayout.HorizontalSlider(currentDistance, 1, 250, customSkins.horizontalSlider, customSkins.horizontalSliderThumb)
+GUI.backgroundColor = myColor 
+
+Player.RaycastDistance = displayedDistance
+
+    GUI.backgroundColor = myColor
+    GUILayout.EndVertical()
+    GUI.DragWindow()
+end
+
+-- Функция для создания кнопки бинда
+function CreateBindButton(actionName, keyVar, labelTemplate)
+    local placeholder = (uiLanguage == "en") and "key" or "клавиша"
+
+    if awaitingKeyBind == actionName then
+        GUI.backgroundColor = HexToColor("fafafa")
+        local btnText = string.format(labelTemplate, placeholder)
+        if GUILayout.Button("<b>" .. btnText .. "</b>", customSkins.button) then
+            -- ждём нажатия клавиши, ничего не делаем
+        end
+        GUI.backgroundColor = HexToColor("fafafa")
+
+        if CS.UnityEngine.Input.GetKeyDown(CS.UnityEngine.KeyCode.Alpha0) then
+            if actionName == "placeBlocks" then
+                placeBlocksKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "destBlocks" then
+                destBlocksKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "firstPos" then
+                firstPosKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "secondPos" then
+                secondPosKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "teleport" then
+                teleportKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "noclip" then
+                noclipKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "underBlock" then
+                underBlockKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "areaModed" then
+                areaModedKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "deleteArea" then
+                deleteAreaKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "copyArea" then
+                copyAreaKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "pasteArea" then
+                pasteAreaKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "replaceArea" then
+                replaceAreaKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "fillArea" then
+                fillAreaKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "undoAction" then
+                undoActionKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "stopProcess" then
+                stopProcessKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "clearArea" then
+                clearAreaKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "rotateLeft" then
+                rotateLeftKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "rotateRight" then
+                rotateRightKey = CS.UnityEngine.KeyCode.None
+            elseif actionName == "draw" then
+                drawKey = CS.UnityEngine.KeyCode.None
+            end
+
+            -- Уведомление пользователю
+            Chat:AddMessage("Бинд '" .. actionName .. "' сброшен", "[a3fc95]")
+
+            awaitingKeyBind = nil
+
+            SaveBindsToFile()
+        end
+    else
+        local keyName = GetKeyName(keyVar)
+        local btnText = string.format(labelTemplate, keyName)
+        if GUILayout.Button("<b>" .. btnText .. "</b>", customSkins.button) then
+            if not awaitingKeyBind then
+                awaitingKeyBind = actionName
+            end
+        end
+    end
+end
+
+function BindWindow(id)
+
+    GUILayout.Space(20)
+
+    scrollPosition3 = GUILayout.BeginScrollView(scrollPosition3, customSkins.verticalScrollbarThumb, customSkins.horizontalScrollbarThumb, GUILayout.Width(260), GUILayout.Height(400))
+    local myColor = HexToColor("fafafa")
+    GUI.backgroundColor = myColor
+
+    GUILayout.BeginVertical()
+
+    -- Кнопка для открытия папки с биндами
+    if GUILayout.Button("<b>" .. buttonLabels.openFolder[uiLanguage] .. "</b>", customSkins.button) then
+        local path = bindsFolder
+        OpenFolder(path)
+    end
+
+    GUILayout.Space(5)
+
+    if GUILayout.Button("<b>" .. buttonLabels.ResetBinds[uiLanguage] .. "</b>", customSkins.button) then
+    placeBlocksKey = CS.UnityEngine.KeyCode.E
+    destBlocksKey = CS.UnityEngine.KeyCode.X
+    firstPosKey = CS.UnityEngine.KeyCode.G
+    secondPosKey = CS.UnityEngine.KeyCode.H
+    teleportKey = CS.UnityEngine.KeyCode.Mouse2
+    noclipKey = CS.UnityEngine.KeyCode.LeftControl
+    underBlockKey = CS.UnityEngine.KeyCode.RightAlt
+    areaModedKey = CS.UnityEngine.KeyCode.B
+    deleteAreaKey = CS.UnityEngine.KeyCode.None
+    copyAreaKey = CS.UnityEngine.KeyCode.None
+    pasteAreaKey = CS.UnityEngine.KeyCode.None
+    replaceAreaKey = CS.UnityEngine.KeyCode.None
+    fillAreaKey = CS.UnityEngine.KeyCode.None
+    undoActionKey = CS.UnityEngine.KeyCode.None
+    stopProcessKey = CS.UnityEngine.KeyCode.None
+    clearAreaKey = CS.UnityEngine.KeyCode.None
+    rotateLeftKey = CS.UnityEngine.KeyCode.None
+    rotateRightKey = CS.UnityEngine.KeyCode.None
+    drawKey = CS.UnityEngine.KeyCode.None
+    SaveBindsToFile()
+end 
+
+GUI.backgroundColor = myColor
+
+
+     GUILayout.Space(10)
+
+    GUILayout.Box("", customSkins.box, GUILayout.ExpandWidth(true), GUILayout.Height(5))
+
+    GUILayout.Space(10)
+
+    GUILayout.EndVertical()
+
+    GUI.backgroundColor = myColor
+
+    GUILayout.BeginHorizontal()
+    -- Noclip Button
+    CreateBindButton("noclip", noclipKey, buttonLabels.keyNoclip[uiLanguage])  GUILayout.Space(5)
+    -- Teleport Button
+    CreateBindButton("teleport", teleportKey, buttonLabels.keyTeleport[uiLanguage])
+    GUILayout.EndHorizontal()
+
+     GUILayout.Space(5)
+
+    GUILayout.BeginVertical()
+    -- Остальные кнопки в вертикальном блоке
+    CreateBindButton("underBlock", underBlockKey, buttonLabels.keyUnBlock[uiLanguage])  GUILayout.Space(5)
+    CreateBindButton("areaModed", areaModedKey, buttonLabels.keyArMode[uiLanguage])  GUILayout.Space(5)
+    CreateBindButton("draw", drawKey, buttonLabels.keydraw[uiLanguage]) 
+    
+     GUILayout.Space(10)
+
+    GUILayout.Box("", customSkins.box, GUILayout.ExpandWidth(true), GUILayout.Height(5))
+
+    GUILayout.Space(10)
+
+    local asskey = buttonLabels.asskey[uiLanguage] or buttonLabels.asskey.ru
+    GUILayout.Label("<b>" .. asskey .. "</b>")
+
+    CreateBindButton("copyArea", copyAreaKey, buttonLabels.keyCopArea[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("pasteArea", pasteAreaKey, buttonLabels.keyPasArea[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("deleteArea", deleteAreaKey, buttonLabels.keyDelArea[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("replaceArea", replaceAreaKey, buttonLabels.keyRepArea[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("fillArea", fillAreaKey, buttonLabels.keyFillArea[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("undoAction", undoActionKey, buttonLabels.keyUndoAct[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("stopProcess", stopProcessKey, buttonLabels.keyStopPr[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("clearArea", clearAreaKey, buttonLabels.keyClear[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("rotateLeft", rotateLeftKey, buttonLabels.keyRotLeft[uiLanguage]) GUILayout.Space(5)
+    CreateBindButton("rotateRight", rotateRightKey, buttonLabels.keyRotRight[uiLanguage]) GUILayout.Space(5)
+
+    GUILayout.EndVertical()
+    GUILayout.EndScrollView()
+    GUI.DragWindow()
+end
+
+function OnGUI()
+    timeAccumulator = (timeAccumulator or 0) + CS.UnityEngine.Time.deltaTime
+
+    local canShowMenu = false
+    if Player then
+        canShowMenu = (Player.IsAdmin or Player.IsModerator) and showMenu
+    end
+
+    if canShowMenu then
+        menuRect = GUILayout.Window(20, menuRect, WindowFunction, "Building Assistance", customSkins.window)
+
+        if showBuildWindow then
+            BuildWindowRect = GUILayout.Window(21, BuildWindowRect, BuildWindowFunction, "" .. buttonLabels.BuildM[uiLanguage] .. "", customSkins.window)
+        end
+
+        if showBindWindow then
+            BindWindowRect = GUILayout.Window(24, BindWindowRect, BindWindow, "" .. buttonLabels.BindsM[uiLanguage] .. "", customSkins.window)
+        end
+
+        if showBodyWindow then
+            BodyWindowRect = GUILayout.Window(22, BodyWindowRect, BodyWindowFunction, "" .. buttonLabels.other[uiLanguage] .. "", customSkins.window)
+        end
+
+        if showBuildListWindow then
+            BuildListWindowRect = GUILayout.Window(23, BuildListWindowRect, BuildListWindowFunction, "" .. buttonLabels.buildL[uiLanguage] .. "", customSkins.window)
+        end
+    end
+
+-- Надпись "developed by cry" в левом верхнем углу
+    local devStyle = CS.UnityEngine.GUIStyle(CS.UnityEngine.GUI.skin.label)
+    devStyle.fontStyle = CS.UnityEngine.FontStyle.Normal  -- обычный шрифт, без жирного
+    devStyle.alignment = CS.UnityEngine.TextAnchor.UpperLeft  -- выравнивание по левому верхнему углу
+    devStyle.normal.textColor = CS.UnityEngine.Color(0, 0, 0, 1)  -- черный
+
+    local devText = "developed by cry"
+    local devContent = CS.UnityEngine.GUIContent(devText)
+    local devSize = devStyle:CalcSize(devContent)
+
+    -- Позиция: отступ от верхнего и левого края
+    local devPadding = 15
+    local devX = devPadding
+    local devY = devPadding
+
+    CS.UnityEngine.GUI.Label(
+        CS.UnityEngine.Rect(devX, devY, devSize.x, devSize.y),
+        devText,
+        devStyle
+    )
+
+    if Player then
+        local coords = Player.Position
+
+        local screenWidth = CS.UnityEngine.Screen.width
+        local screenHeight = CS.UnityEngine.Screen.height
+
+        local padding = 8
+        local labelWidth = 150
+
+        local styleHeader = CS.UnityEngine.GUIStyle(CS.UnityEngine.GUI.skin.label)
+        styleHeader.fontStyle = CS.UnityEngine.FontStyle.Bold
+        styleHeader.alignment = CS.UnityEngine.TextAnchor.UpperRight
+
+        local headerText = "Координаты:"
+        local headerContent = CS.UnityEngine.GUIContent(headerText)
+        local headerHeight = styleHeader:CalcHeight(headerContent, labelWidth)
+
+        local headerSize = styleHeader:CalcSize(headerContent)
+        totalHeight = headerHeight * 4
+        local posY = screenHeight - totalHeight - padding
+        local posXHeader = screenWidth - padding - 1
+        CS.UnityEngine.GUI.Label(CS.UnityEngine.Rect(posXHeader - headerSize.x, posY, headerSize.x, headerHeight), headerText, styleHeader)
+
+           -- Стиль для координат: выравнивание по центру для симметрии
+    local styleCoords = CS.UnityEngine.GUIStyle(CS.UnityEngine.GUI.skin.label)
+    styleCoords.fontStyle = CS.UnityEngine.FontStyle.Bold
+    styleCoords.alignment = CS.UnityEngine.TextAnchor.UpperCenter  -- выравнивание по центру
+
+
+    -- Фиксированная ширина для всех строк координат
+    local fixedLabelWidth = 120
+
+    -- Высота строки (рассчитывается один раз)
+    local lineHeight = styleCoords:CalcHeight(CS.UnityEngine.GUIContent("X = 0000"), fixedLabelWidth)
+
+    -- Координата X по центру относительно заголовка
+    local centerX = posXHeader - headerSize.x / 2
+
+    -- Массив строк координат с целыми числами
+    local coordLines = {
+        string.format("X = %d", math.floor(coords.x)),  -- целые числа, округление вниз
+        string.format("Y = %d", math.floor(coords.y)),
+        string.format("Z = %d", math.floor(coords.z))
+    }
+
+    -- Отрисовка каждой строки координат
+    for i, text in ipairs(coordLines) do
+        local linePosY = posY + headerHeight + (lineHeight * (i - 1))
+        CS.UnityEngine.GUI.Label(
+            CS.UnityEngine.Rect(centerX - fixedLabelWidth / 2, linePosY, fixedLabelWidth, lineHeight),
+            text,
+            styleCoords
+        )
+    end
+  end
+end
+
+function Update()
+if not isInitialized then
+        return  -- Не выполняем логику, пока мод не инициализирован
+    end
+
+    UpdateSelectionOffset()
+    local deltaTime = CS.UnityEngine.Time.deltaTime
+    undoTimer = undoTimer + deltaTime
+
+    if awaitingKeyBind then
+    CheckMouseButtons()
+    for keyCode, keyName in pairs(KeyCodeNames) do
+        if keyCode ~= CS.UnityEngine.KeyCode.Mouse0
+           and keyCode ~= CS.UnityEngine.KeyCode.Mouse1
+           and keyCode ~= CS.UnityEngine.KeyCode.Mouse2 then
+            if CS.UnityEngine.Input.GetKeyDown(keyCode) then
+                AssignKeyToBind(keyCode)
+                return
+            end
+        end
+    end
+
+    -- Обработка кнопок мыши для биндов
+    if CS.UnityEngine.Input.GetMouseButtonDown(0) then
+        AssignKeyToBind(CS.UnityEngine.KeyCode.Mouse0)
+        return
+    elseif CS.UnityEngine.Input.GetMouseButtonDown(1) then
+        AssignKeyToBind(CS.UnityEngine.KeyCode.Mouse1)
+        return
+    elseif CS.UnityEngine.Input.GetMouseButtonDown(2) then
+        AssignKeyToBind(CS.UnityEngine.KeyCode.Mouse2)
+        return
+    end
+end
+
+    if underBlockKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(underBlockKey) then
+        SetBlockUnderPlayer()
+    end
+
+    --if CS.UnityEngine.Input.GetKeyDown(CS.UnityEngine.KeyCode.N) then
+       -- ShowBlockFormUnderCrosshair()
+    --end
+    -- Отдельный блок для сообщения (один раз при нажатии)
+if placeBlocksMode and CS.UnityEngine.Input.GetKeyDown(placeBlocksKey) then
+    if AreAllSlidersAboveFive() then
+        Chat:AddMessage("Невозможно установить блоки: значения сразу нескольких слайдеров 5 или больше", "[f54949]")
+    end
+end
+
+hasShownNoBlockMessage = false  -- сбрасываем флаг каждый кадр
+
+ -- Обработка установки блоков
+if placeBlocksMode then
+    if buildDestroyMode == "hold" and CS.UnityEngine.Input.GetKey(placeBlocksKey) then
+        local currentTime = CS.UnityEngine.Time.time
+
+        if currentTime - lastBlockActionTime >= CALL_INTERVAL then
+            if not AreAllSlidersAboveFive() then
+                SetBlock()
+                lastBlockActionTime = currentTime
+            end
+        end
+    elseif buildDestroyMode == "click" and CS.UnityEngine.Input.GetKeyDown(placeBlocksKey) then
+        if AreAllSlidersAboveFive() then
+            Chat:AddMessage("Невозможно установить блоки: значения сразу нескольких слайдеров 5 или больше", "[f54949]")
+        else
+            SetBlock()  -- Вызываем один раз при клике
+        end
+    end
+end
+
+-- Обработка удаления блоков
+if destBlocksMode then
+    if buildDestroyMode == "hold" and CS.UnityEngine.Input.GetKey(destBlocksKey) then
+        local currentTime = CS.UnityEngine.Time.time
+
+        if currentTime - lastDestroyActionTime >= CALL_INTERVAL then
+            if not AreAllSlidersAboveFive() then
+                DestroyBlock()  -- Ограниченный вызов при удержании
+                lastDestroyActionTime = currentTime
+            end
+        end
+    elseif buildDestroyMode == "click" and CS.UnityEngine.Input.GetKeyDown(destBlocksKey) then
+        if AreAllSlidersAboveFive() then
+            Chat:AddMessage("Невозможно удалить блоки: значения сразу нескольких слайдеров 5 или больше", "[f54949]")
+        else
+            DestroyBlock()  -- Вызываем один раз при клике
+        end
+    end
+end
+
+if destBlocksMode and CS.UnityEngine.Input.GetKeyDown(destBlocksKey) then
+    if AreAllSlidersAboveFive() then
+        Chat:AddMessage("Невозможно удалить блоки: значения сразу нескольких слайдеров 5 или больше", "[f54949]")
+    end
+end
+
+    if CS.UnityEngine.Input.GetKeyDown(CS.UnityEngine.KeyCode.Insert) then
+        showMenu = not showMenu
+    end
+
+    if selectAreaMode then
+        -- Обработка нажатий клавиш для установки точек выделения
+        HandleSelectionKeyInput()
+
+        -- Удаление блоков в выделенной области по бинду 
+        if deleteAreaKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(deleteAreaKey) then
+            StartDestroy()
+        end
+
+    --  копирование области по бинду 
+        if copyAreaKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(copyAreaKey) then
+            CopySelection()
+        end
+
+        --  установка области по бинду 
+        if pasteAreaKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(pasteAreaKey) then
+            StartPasting()
+        end
+
+        --  замена области по бинду 
+        if replaceAreaKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(replaceAreaKey) then
+            StartReplacing()
+        end
+
+        --  заполнение области по бинду 
+        if fillAreaKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(fillAreaKey) then
+            StartFilling()
+        end
+
+         -- отмена действия по бинду сукаываываоыв заеьался писаит
+        if undoActionKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(undoActionKey) then
+            StartUndo()
+        end
+
+         -- остановка процесса по бинду
+        if stopProcessKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(stopProcessKey) then
+            StopAllProcesses()
+        end
+
+          -- очистка области по бинду
+        if clearAreaKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(clearAreaKey) then
+            ClearSelectionAndReset()
+            ClearAllDataTables()
+        end
+
+         -- поворот влево по бинду
+        if rotateLeftKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(rotateLeftKey) then
+            RotateCopiedBlocksLeft() 
+        end
+
+        -- поворот вправо по бинду
+        if rotateRightKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(rotateRightKey) then
+            RotateCopiedBlocksRight()
+        end
+
+         -- вкл/выкл отрисовки по бинду
+        if drawKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(drawKey) then
+            ToggleVisibility()
+        end
+    end
+
+    if areaModedKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(areaModedKey) then
+        ToggleStaticSelectionMode()
+    end
+
+    if undoTimer >= undoInterval then
+        undoTimer = 0
+
+        if isDeleting and blocksToDelete and #blocksToDelete > 0 then
+        local endIndex = math.min(currentDeleteIndex + deleteSpeed - 1, #blocksToDelete)
+        for i = currentDeleteIndex, endIndex do
+        World:RemoveBlock(blocksToDelete[i].pos)
+        blocksToDelete[i].processed = true  -- помечаем как обработанный
+    end
+    currentDeleteIndex = endIndex + 1
+    if currentDeleteIndex > #blocksToDelete then
+        isDeleting = false
+    end
+end
+
+        if isReplacing and blocksToReplace and #blocksToReplace > 0 then
+        local endIndex = math.min(currentReplaceIndex + deleteSpeed - 1, #blocksToReplace)
+        for i = currentReplaceIndex, endIndex do
+        local item = blocksToReplace[i]
+        World:AddBlock(item.pos, item.blockType, item.blockForm)
+        blocksToReplace[i].processed = true  -- помечаем как обработанный
+    end
+    currentReplaceIndex = endIndex + 1
+
+    if currentReplaceIndex > #blocksToReplace then
+        isReplacing = false
+    end
+end
+
+    if isPlacing and blocksToPlace and #blocksToPlace > 0 then
+    local endIndex = math.min(currentPlaceIndex + deleteSpeed - 1, #blocksToPlace)
+    for i = currentPlaceIndex, endIndex do
+        local item = blocksToPlace[i]
+        World:AddBlock(item.pos, item.blockType, item.blockForm)
+        blocksToPlace[i].processed = true  -- помечаем как обработанный
+    end
+    currentPlaceIndex = endIndex + 1
+    if currentPlaceIndex > #blocksToPlace then
+        isPlacing = false
+        isPasteInProgress = false  -- сброс флага: вставка завершена
+    end
+end
+
+  -- Постепенная отмена через чанки с учётом deleteSpeed
+if isUndoing and undoChunks and currentChunkIndex <= #undoChunks then
+    local currentChunk = undoChunks[currentChunkIndex]
+    local processedInThisFrame = 0  -- счётчик обработанных блоков в текущем кадре
+
+    -- Обрабатываем до deleteSpeed блоков за кадр
+    while currentBlockIndexInChunk <= #currentChunk and processedInThisFrame < deleteSpeed do
+        local block = currentChunk[currentBlockIndexInChunk]
+
+        if IsPositionInBounds(block.pos) then
+            local currentType = World:GetBlockType(block.pos)
+            local currentForm = World:GetBlockKind(block.pos) or 0
+
+            -- ПРОПУСКАЕМ, если блок уже соответствует сохранённому состоянию
+            if currentType == block.blockType and currentForm == block.blockForm then
+                currentBlockIndexInChunk = currentBlockIndexInChunk + 1
+                processedInThisFrame = processedInThisFrame + 1
+                goto continue_undo
+            end
+
+            -- Восстанавливаем только если состояние отличается
+            if currentType ~= block.blockType or currentForm ~= block.form then
+                if block.blockType == 0 then
+                    World:RemoveBlock(block.pos)
+                else
+                    World:AddBlock(block.pos, block.blockType, block.blockForm)
+                end
+            end
+        end
+
+        currentBlockIndexInChunk = currentBlockIndexInChunk + 1
+        processedInThisFrame = processedInThisFrame + 1
+
+        ::continue_undo::
+    end
+
+    -- Если в текущем чанке закончились блоки, переходим к следующему
+    if currentBlockIndexInChunk > #currentChunk then
+        currentChunkIndex = currentChunkIndex + 1
+        currentBlockIndexInChunk = 1
+    end
+
+    -- Завершение отмены
+    if currentChunkIndex > #undoChunks then
+        isUndoing = false
+        undoChunks = nil
+        lastActionBlocks = nil
+        --Chat:AddMessage("Отмена последнего действия завершена", "[a455f2]")
+    else
+        -- Опциональное отображение прогресса (каждые 100 блоков или по желанию)
+        local totalProcessed = (currentChunkIndex - 1) * #currentChunk + (currentBlockIndexInChunk - 1)
+        if totalProcessed % 100 == 0 and totalProcessed > 0 then  -- показываем каждые 100 обработанных блоков
+            LogChatMessage(string.format("Отмена: обработано %d из %d блоков", totalProcessed, #lastActionBlocks), "[888888]")
+        end
+    end
+else
+    -- Если по какой‑то причине обработка прервалась
+    if isUndoing then
+        isUndoing = false
+        Chat:AddMessage("Ошибка при отмене действия", "[f54949]")
+    end
+end
+
+        if isFilling and blocksToReplace and #blocksToReplace > 0 then
+        local endIndex = math.min(currentFillIndex + deleteSpeed - 1, #blocksToReplace)
+        for i = currentFillIndex, endIndex do
+        local item = blocksToReplace[i]
+        World:AddBlock(item.pos, item.blockType, item.blockForm)
+        blocksToReplace[i].processed = true  -- помечаем как обработанный
+    end
+    currentFillIndex = endIndex + 1
+    if currentFillIndex > #blocksToReplace then
+        isFilling = false
+    end
+   end
+end
+
+if not selectAreaMode then
+    isDeleting = false
+    isReplacing = false
+    isPlacing = false
+    isFilling = false
+end
+
+-- Постепенное копирование области
+if isCopying and copyChunks and currentCopyChunkIndex <= #copyChunks then
+    local currentChunk = copyChunks[currentCopyChunkIndex]
+    local processedInThisFrame = 0
+
+
+    while currentBlockInCopyChunk <= #currentChunk and processedInThisFrame < copySpeed do
+        local pos = currentChunk[currentBlockInCopyChunk]
+        local blockType = World:GetBlockType(pos)
+
+        if blockType ~= 0 then
+            local blockForm = World.GetBlockKind and World:GetBlockKind(pos) or 0
+            local offset = CS.UnityEngine.Vector3(
+                pos.x - FirstPos.x,
+                pos.y - FirstPos.y,
+                pos.z - FirstPos.z
+            )
+            table.insert(buildData.blocks, {
+                offset = offset,
+                blockType = blockType,
+                blockForm = blockForm
+            })
+        end
+
+        currentBlockInCopyChunk = currentBlockInCopyChunk + 1
+        processedInThisFrame = processedInThisFrame + 1
+    end
+
+    -- Переходим к следующему чанку, если текущий закончен
+    if currentBlockInCopyChunk > #currentChunk then
+        currentCopyChunkIndex = currentCopyChunkIndex + 1
+        currentBlockInCopyChunk = 1
+    end
+
+    -- Завершение копирования
+if currentCopyChunkIndex > #copyChunks then
+    isCopying = false  -- критически важный сброс флага!
+    copyChunks = nil
+    allPositions = nil  -- освобождаем память
+    totalCopyPositions = 0  -- сбрасываем счётчик
+    isLargeCopy = false  -- сбрасываем флаг большой области
+    useCopiedBlocks = true
+    currentRotation = 0
+    Chat:AddMessage(
+        "Копирование завершено: " .. tostring(#buildData.blocks) .. " блоков.",
+        "[a455f2]"
+    )
+else
+    -- Расчёт процента завершения (только для больших областей)
+    if isLargeCopy then
+        local totalProcessed = (currentCopyChunkIndex - 1) * 100 + (currentBlockInCopyChunk - 1)
+        local percentComplete = math.floor((totalProcessed / totalCopyPositions) * 100)  -- целое число процентов
+
+        -- Получаем текущее время (в секундах с начала игры)
+        local currentTime = CS.UnityEngine.Time.time
+
+        -- Выводим прогресс каждые 2 секунды
+        if currentTime - copyProgressLastUpdate >= copyProgressUpdateInterval then
+            Chat:AddMessage(
+                string.format("Копирование: %d%% завершено",
+                    percentComplete, totalCopyPositions),
+            "[b888cf]"
+        )
+            copyProgressLastUpdate = currentTime  -- обновляем время последнего сообщения
+        end
+    end
+end
+   else
+    -- Обработка прерывания
+    if isCopying then
+        isCopying = false  -- сброс флага при прерывании
+        allPositions = nil
+        totalCopyPositions = 0
+        isLargeCopy = false
+        copyProgressLastUpdate = 0  -- сбрасываем таймер прогресса
+        Chat:AddMessage("Ошибка при копировании", "[f54949]")
+    end
+end
+
+     -- Если noclip активен, но у игрока больше нет прав, отключаем noclip
+    if noclipActive and not (Player.IsAdmin or Player.IsModerator) then
+        noclipActive = false
+        local playerLayer = 2
+        local terrainLayer = CS.UnityEngine.LayerMask.NameToLayer("Terrain")
+        local entityLayer = CS.UnityEngine.LayerMask.NameToLayer("Entity")
+        CS.UnityEngine.Physics.IgnoreLayerCollision(playerLayer, terrainLayer, false)
+        CS.UnityEngine.Physics.IgnoreLayerCollision(playerLayer, entityLayer, false)
+        print("Noclip disabled due to loss of permissions")
+    end
+
+    -- Обработка нажатия LeftControl для переключения noclip (уже с проверкой прав)
+    if noclipToggle and noclipKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(noclipKey) then
+        if not (Player.IsAdmin or Player.IsModerator) then
+            return -- Нет прав включать noclip
+        end
+
+        noclipActive = not noclipActive
+        local playerLayer = 2
+        local terrainLayer = CS.UnityEngine.LayerMask.NameToLayer("Terrain")
+        local entityLayer = CS.UnityEngine.LayerMask.NameToLayer("Entity")
+
+        CS.UnityEngine.Physics.IgnoreLayerCollision(playerLayer, terrainLayer, noclipActive)
+        CS.UnityEngine.Physics.IgnoreLayerCollision(playerLayer, entityLayer, noclipActive)
+
+        if noclipActive then
+            print("Noclip enabled")
+        else
+            print("Noclip disabled")
+        end
+    end
+
+  local playerInput = FindPlayerInput()
+if playerInput then
+    if not Player.IsAdmin and not Player.IsModerator then
+        return  -- Выходим, если нет прав
+    end
+    -- управление скоростью, как есть
+    if speedToggle then
+        playerInput:SetSpeedModifier(speedModifier)
+    else
+        playerInput:SetSpeedModifier(1)
+    end
+
+    if flyToggle ~= wasFlyToggle then
+        playerInput:SendMessage("SetLadderBody", flyToggle)
+        wasFlyToggle = flyToggle
+    end
+    -- если flyToggle выключен — не мешаем игре переключать полёт клавишей
+end
+
+    -- Проверка нажатия клавиши телепорта (если бинд назначен)
+if teleportToggle and teleportKey ~= CS.UnityEngine.KeyCode.None and CS.UnityEngine.Input.GetKeyDown(teleportKey) then
+    Teleport()
+end
+ -- Получаем время кадра правильно
+    local deltaTime = CS.UnityEngine.Time.deltaTime  -- стандартный способ
+
+    gcCooldown = gcCooldown - deltaTime
+
+    -- Запуск раз в 10 секунд: начинаем новый цикл очистки
+    if gcCooldown <= 0 and CS.UnityEngine.Time.time - lastGCRun >= GC_CHECK_INTERVAL then
+        gcSteps = GC_TOTAL_STEPS  -- 5 шагов по 20 % мусора
+        gcCooldown = GC_STEP_DELAY  -- шаг раз в 0.5 с
+        lastGCRun = CS.UnityEngine.Time.time
+    end
+
+    --[[ Выполняем один шаг сбора мусора, если нужно
+    if gcSteps > 0 then
+        collectgarbage("step", 10)  -- небольшой шаг сбора мусора
+
+        gcSteps = gcSteps - 1
+        if gcSteps == 0 then
+            gcCooldown = -1  -- сброс таймера, чтобы не запускать шаги до следующего цикла
+        else
+            gcCooldown = GC_STEP_DELAY  -- сбрасываем таймер для следующего шага
+        end
+    end]]
+ CheckAndReportMemory()
+end
