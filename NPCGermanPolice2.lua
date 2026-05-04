@@ -1,7 +1,7 @@
 local unity = CS.UnityEngine
 
 -- === НАСТРОЙКИ ===
-local CHASE_RADIUS    = 50.0
+local CHASE_RADIUS    = 70.0
 local ATTACK_DIST     = 1.5
 local CHASE_SPEED     = 3.5
 local ATTACK_COOLDOWN = 0.5
@@ -11,13 +11,22 @@ local ANIM_RUN        = "run_3"
 local ANIM_ATTACK     = "dig"
 local ANIM_IDLE       = "idle"
 
+-- === НАСТРОЙКИ СОБАКИ ===
+local DOG_CHASE_SPEED = 5.5
+local DOG_ANIM_RUN    = "run_0"
+local DOG_ANIM_IDLE   = "idle_3"
+local DOG_SOUND_INTERVAL = 5.0
+local DOG_ATTACK_DIST = 2.0        -- Дистанция атаки
+local DOG_ATTACK_COOLDOWN = 0.5    -- Кулдаун между атаками
+local DOG_ATTACK_DAMAGE = 0 
+
 -- URL картинки, которая появится при аресте
 local ARREST_IMAGE_URL = "https://raw.githubusercontent.com/0x2171/DiggerMod/refs/heads/main/narucniki.png"
 
 -- === СИСТЕМА РОЗЫСКА ===
 local STAR_ICON_URL = "https://raw.githubusercontent.com/0x2171/DiggerMod/refs/heads/main/CopIcon.png"
 local PROPERTIES_FILE_PATH = "C:\\DANZIG\\properties.json"
-local PURSUIT_TIME_FOR_SECOND_STAR = 120.0 -- 2 минуты
+local PURSUIT_TIME_FOR_SECOND_STAR = 20.0 -- 2 минуты
 local MIN_PLAYERS_FOR_THIRD_STAR = 3
 
 -- Переменные для иконок звезд
@@ -27,6 +36,15 @@ local star1Active = false
 local star2Active = false
 local star3Active = false
 local pursuitTimer = 0.0
+
+-- === ПЕРЕМЕННЫЕ ДЛЯ СОБАКИ ===
+local dogObject = nil
+local dogAnimation = nil
+local dogAudioSource = nil
+local dogChaseTimer = 0.0
+local dogLastSoundTime = 0.0
+local dogIsActive = false
+local dogLastAttackTime = 0.0
 
 -- Глобальные данные из файла
 local globalWantedData = {}
@@ -91,7 +109,7 @@ local function PlayAnim(name) if animation then animation:Play(name) end end
 local function SerializeTable(val, s, depth)
     s = s or "{}"
     depth = depth or 0
-    
+
     if type(val) == "table" then
         local s2 = "{"
         local count = 0
@@ -125,10 +143,10 @@ end
 local function ParseSimpleJson(jsonStr)
     local result = {}
     if not jsonStr or jsonStr == "" then return result end
-    
+
     local content = jsonStr:gsub("^%s*{", ""):gsub("}%s*$", "")
     local pattern = '"([^"]+)"%s*:%s*(%b{})'
-    
+
     for npcId, dataStr in content:gmatch(pattern) do
         local npcData = {}
         for key, val in dataStr:gmatch('"([^"]+)"%s*:%s*([^,%}]+)') do
@@ -145,7 +163,7 @@ local function ParseSimpleJson(jsonStr)
         end
         result[npcId] = npcData
     end
-    
+
     return result
 end
 
@@ -182,7 +200,7 @@ end
 local function UpdateNPCDataInFile()
     ReadWantedData()
     local npcId = GetNPCId()
-    
+
     globalWantedData[npcId] = {
         star1 = star1Active,
         star2 = star2Active,
@@ -193,14 +211,14 @@ local function UpdateNPCDataInFile()
         posY = transform.position.y,
         posZ = transform.position.z
     }
-    
+
     WriteWantedData()
 end
 
 local function IsPlayerAlreadyArrested()
     ReadWantedData()
     local myId = GetNPCId()
-    
+
     for npcId, data in pairs(globalWantedData) do
         if npcId ~= myId then
             if data and data.isArrested == true then
@@ -215,13 +233,13 @@ local function SyncWantedLogic()
     ReadWantedData()
     local totalDetected = 0
     local myId = GetNPCId()
-    
+
     for npcId, data in pairs(globalWantedData) do
         if data and data.star1 == true then
             totalDetected = totalDetected + 1
         end
     end
-    
+
     if totalDetected >= MIN_PLAYERS_FOR_THIRD_STAR then
         star3Active = true
     else
@@ -271,9 +289,27 @@ function Start()
     waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
     PlayAnim(ANIM_IDLE)
 
+    -- === ИНИЦИАЛИЗАЦИЯ СОБАКИ ===
+    local dogSpawnObj = transform:Find("DogSpawn")
+    if dogSpawnObj ~= nil then
+        local dogTransform = dogSpawnObj:Find("dog")
+        if dogTransform ~= nil then
+            dogObject = dogTransform.gameObject
+            if dogObject ~= nil then
+                dogObject:SetActive(false)
+                local dogChild = dogObject.transform:Find("Dog")
+                if dogChild ~= nil then
+                    dogAnimation = dogChild.gameObject:GetComponent(typeof(unity.Animation))
+                end
+                dogAudioSource = dogObject:GetComponent(typeof(unity.AudioSource))
+                unity.Debug.Log("[NPC] Dog found and hidden")
+            end
+        end
+    end
+
     local polCarChild = transform:Find("PolicayCar")
     if polCarChild ~= nil then
-        polCarChild.parent = nil
+        polCarChild:SetParent(nil)
         policeCar = polCarChild.gameObject
 
         local sideOffset = transform.right * 5.0
@@ -315,10 +351,19 @@ function Start()
 end
 
 function OnDestroy()
+    if dogObject ~= nil then
+        unity.Object.Destroy(dogObject)
+        dogObject = nil
+        dogIsActive = false
+        unity.Debug.Log("[NPC] Dog destroyed with NPC")
+    end
+
+    -- Уничтожаем полицейскую машину
     if policeCar ~= nil then
         unity.Object.Destroy(policeCar)
     end
-    
+
+    -- Удаляем данные этого NPC из файла
     ReadWantedData()
     globalWantedData[GetNPCId()] = nil
     WriteWantedData()
@@ -335,7 +380,7 @@ function Update()
     if spawnPos == nil then return end
     local dt = unity.Time.deltaTime
 
-    -- Загрузка текстур
+    -- === Загрузка текстур ===
     if textureRequest and textureRequest.isDone then
         if not textureRequest.isNetworkError and not textureRequest.isHttpError then
             arrestTexture = CS.UnityEngine.Networking.DownloadHandlerTexture.GetContent(textureRequest)
@@ -352,7 +397,7 @@ function Update()
         starTextureRequest = nil
     end
 
-    -- Синхронизация
+    -- === Синхронизация с файлом ===
     fileReadTimer = fileReadTimer + dt
     if fileReadTimer >= FILE_READ_INTERVAL then
         fileReadTimer = 0
@@ -360,7 +405,7 @@ function Update()
         UpdateNPCDataInFile()
     end
 
-    -- Управление админа (звезды)
+    -- === Управление админа (звезды) ===
     if Player.IsAdmin then
         if unity.Input.GetKeyDown(unity.KeyCode.Alpha0) then
             star1Active = not star1Active
@@ -376,7 +421,64 @@ function Update()
         end
     end
 
-    -- Проверка: арестован ли игрок другим NPC?
+    -- === 🔧 ЛОГИКА СОБАКИ (ПЕРЕМЕЩЕНА ВНАЧАЛО) ===
+	if dogIsActive and dogObject ~= nil then
+		local playerPos = Player.Position
+		local dogPos = dogObject.transform.position
+
+		if isArrested or (IsPlayerAlreadyArrested() and not isArrested and state ~= "Escorting") then
+			-- Игрок арестован — собака прекращает преследование
+			dogChaseTimer = 0.0
+			if dogAnimation then
+				dogAnimation:Play(DOG_ANIM_IDLE)
+			end
+			if dogAudioSource and dogAudioSource.isPlaying then
+				dogAudioSource:Stop()
+			end
+		else
+			-- === Движение к игроку ===
+			local dir = playerPos - dogPos
+			dir.y = 0
+			if dir.sqrMagnitude > 0.0001 then
+				dir = dir.normalized
+				local dist = unity.Vector3.Distance(dogPos, playerPos)
+				dogObject.transform.position = dogPos + dir * math.min(dist, DOG_CHASE_SPEED * dt)
+				dogObject.transform.rotation = unity.Quaternion.Slerp(
+					dogObject.transform.rotation, 
+					unity.Quaternion.LookRotation(dir), 
+					dt * 8.0
+				)
+			end
+
+			-- === 🔥 Атака собаки: урон 0 на дистанции 1 метр ===
+			local distToPlayer = unity.Vector3.Distance(dogPos, playerPos)
+			if distToPlayer <= DOG_ATTACK_DIST then
+				if unity.Time.time - dogLastAttackTime >= DOG_ATTACK_COOLDOWN then
+					dogLastAttackTime = unity.Time.time
+					Player:TakeDamage(DOG_ATTACK_DAMAGE)  -- Наносим 0 урона
+					-- Можно добавить звук "лая" или визуальный эффект здесь
+					unity.Debug.Log("[DOG] Attack player (damage: 0)")
+				end
+			end
+
+			-- Анимация бега (обновляем каждый кадр)
+			if dogAnimation then
+				dogAnimation:Play(DOG_ANIM_RUN)
+			end
+
+			-- Звук собаки каждые 8 секунд
+			dogLastSoundTime = dogLastSoundTime + dt
+			if dogLastSoundTime >= DOG_SOUND_INTERVAL then
+				dogLastSoundTime = 0.0
+				if dogAudioSource then
+					dogAudioSource:Play()
+				end
+			end
+		end
+	end
+    -- === 🔧 КОНЕЦ ЛОГИКИ СОБАКИ ===
+
+    -- === Проверка: арестован ли игрок другим NPC? ===
     local playerArrestedByOther = IsPlayerAlreadyArrested() and not isArrested and state ~= "Escorting"
 
     if playerArrestedByOther then
@@ -390,11 +492,10 @@ function Update()
             attackCount = 0
             adminProvoked = false
             pursuitTimer = 0.0
-            -- Сбрасываем цель преследования, чтобы не стоять на месте
-            targetPos = nil 
+            targetPos = nil
             waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
         end
-        -- Не делаем return, а даем коду идти дальше до блока Idle/Wander
+        -- Не делаем return, даём коду идти дальше до блока патруля
     end
 
     -- === ЛОГИКА АРЕСТА (ЕСЛИ МЫ АРЕСТОВАЛИ) ===
@@ -415,7 +516,7 @@ function Update()
             isPlayerLocked = false
             isSittingTimerActive = false
             PlayAnim(ANIM_RUN)
-            UpdateNPCDataInFile() 
+            UpdateNPCDataInFile()
         end
 
         if stayPoint ~= nil and not hasReachedStay then
@@ -469,11 +570,10 @@ function Update()
         return
     end
 
-    -- Если игрок арестован другим, пропускаем логику агрессии и идем сразу к патрулю
+    -- === ЛОГИКА АГГРО (если игрок НЕ арестован другим) ===
     if not playerArrestedByOther then
         local playerPos = Player.Position
         local dist = unity.Vector3.Distance(transform.position, playerPos)
-
         local shouldAggro = dist <= CHASE_RADIUS and ((not Player.IsAdmin) or adminProvoked)
 
         if shouldAggro then
@@ -490,23 +590,42 @@ function Update()
                     local chosenAudio = nil
                     if delayedAudio and delayedAudio2 then
                         chosenAudio = unity.Random.value < 0.5 and delayedAudio or delayedAudio2
-                    elseif delayedAudio then chosenAudio = delayedAudio
-                    elseif delayedAudio2 then chosenAudio = delayedAudio2 end
-                    
+                    elseif delayedAudio then 
+                        chosenAudio = delayedAudio
+                    elseif delayedAudio2 then 
+                        chosenAudio = delayedAudio2 
+                    end
                     if chosenAudio then chosenAudio:Play() end
                     delayedSoundPlayed = true
                 end
             end
-            
+
             if not star1Active then
                 star1Active = true
                 UpdateNPCDataInFile()
             end
-            
+
             pursuitTimer = pursuitTimer + dt
             if pursuitTimer >= PURSUIT_TIME_FOR_SECOND_STAR and not star2Active then
                 star2Active = true
                 UpdateNPCDataInFile()
+
+                -- Активация собаки при второй звезде
+                if dogObject ~= nil and not dogIsActive then
+                    dogObject.transform:SetParent(nil)
+					dogObject.transform.position = transform.position - transform.right * 2.0
+                    dogObject:SetActive(true)
+                    dogIsActive = true
+                    dogChaseTimer = 0.0
+                    dogLastSoundTime = 0.0
+                    if dogAnimation then
+                        dogAnimation:Play(DOG_ANIM_RUN)
+                    end
+					if dogAudioSource then
+						dogAudioSource:Play()
+					end
+                    unity.Debug.Log("[NPC] Dog activated at star 2")
+                end
             end
         else
             if alertPlayed then
@@ -523,6 +642,7 @@ function Update()
             end
         end
 
+        -- === Логика атаки ===
         if state == "Attacking" then
             attackTimer = attackTimer - dt
             if attackTimer <= 0 then
@@ -557,13 +677,11 @@ function Update()
                 end
                 MoveTo(playerPos, CHASE_SPEED, dt)
             end
-            -- Если мы в аггро, не выполняем логику патруля ниже
-            return 
+            return -- 🔥 ВАЖНО: этот return больше не блокирует собаку, т.к. её логика уже выполнена выше
         end
     end
 
     -- === ЛОГИКА ПАТРУЛЯ (IDLE / WANDER) ===
-    -- Сюда попадаем, если нет аггро ИЛИ если игрок арестован другим NPC
     if state == "Chase" or state == "Attacking" then
         state = "Idle"
         PlayAnim(ANIM_IDLE)
@@ -616,7 +734,7 @@ function OnGUI()
         local rightMostX = screenW - margin - iconSize
         local startY = margin
 
-        -- Рисуем от 3 к 1, чтобы расположить их справа налево визуально, 
+        -- Рисуем от 3 к 1, чтобы расположить их справа налево визуально,
         -- но индекс 1 будет слева в группе.
         -- Порядок отрисовки: 3 (справа), 2 (центр), 1 (слева в группе)
         for i = 3, 1, -1 do
@@ -626,7 +744,7 @@ function OnGUI()
             elseif i == 3 then isActive = star3Active
             end
 
-            -- Вычисляем X. 
+            -- Вычисляем X.
             -- i=3: offset = 0 -> x = rightMostX
             -- i=2: offset = size+space -> x = rightMostX - (size+space)
             -- i=1: offset = 2*(size+space) -> x = rightMostX - 2*(size+space)
@@ -643,7 +761,7 @@ function OnGUI()
 
             unity.GUI.DrawTexture(rect, starTexture)
         end
-        
+
         unity.GUI.color = unity.Color(1.0, 1.0, 1.0, 1.0)
     end
 end
