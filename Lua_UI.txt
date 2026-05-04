@@ -1,0 +1,415 @@
+# Lua UI (Unity IMGUI) для модов 
+
+Этот документ показывает, как делать меню мода через обычный Unity IMGUI из Lua:
+
+- `OnGUI()`
+- `GUI`
+- `GUILayout`
+
+
+## 1. Что важно про IMGUI
+
+Unity IMGUI работает в `OnGUI()` и рисуется каждый кадр.
+Для Lua-мода это значит:
+
+- UI-код живет в `function OnGUI()`.
+- Состояние UI (открыто/закрыто, значения слайдеров, rect окон) хранится в переменных скрипта.
+- Тяжелую логику (большие циклы, обработка мира) лучше делать в `Update()`, а не в `OnGUI()`.
+
+Минимальные импорты:
+
+```lua
+local Unity = CS.UnityEngine
+local GUI = Unity.GUI
+local GUILayout = Unity.GUILayout
+local Rect = Unity.Rect
+```
+
+## 2. Самые базовые элементы
+
+Ниже идут максимально простые примеры. Их можно копировать по одному, чтобы понять основу IMGUI.
+
+### 2.1 Только текст (`Label`)
+
+```lua
+function OnGUI()
+    CS.UnityEngine.GUILayout.Label("Привет из Lua UI")
+end
+```
+
+### 2.2 Кнопка (`Button`)
+
+```lua
+local clicks = clicks or 0
+
+function OnGUI()
+    if CS.UnityEngine.GUILayout.Button("Нажми меня") then
+        clicks = clicks + 1
+    end
+
+    CS.UnityEngine.GUILayout.Label("Кликов: " .. tostring(clicks))
+end
+```
+
+### 2.3 Переключатель (`Toggle`)
+
+```lua
+local enabledFlag = enabledFlag or false
+
+function OnGUI()
+    enabledFlag = CS.UnityEngine.GUILayout.Toggle(enabledFlag, "Включить режим")
+    CS.UnityEngine.GUILayout.Label("Состояние: " .. tostring(enabledFlag))
+end
+```
+
+### 2.4 Поле ввода (`TextField`) + кнопка
+
+```lua
+local textValue = textValue or "Привет"
+
+function OnGUI()
+    textValue = CS.UnityEngine.GUILayout.TextField(textValue, 200)
+
+    if CS.UnityEngine.GUILayout.Button("Отправить в чат") then
+        Chat:SendMessage(textValue)
+    end
+end
+```
+
+### 2.5 Ползунок (`HorizontalSlider`)
+
+```lua
+local value = value or 10
+
+function OnGUI()
+    value = CS.UnityEngine.GUILayout.HorizontalSlider(value, 1, 100)
+    CS.UnityEngine.GUILayout.Label("Значение: " .. tostring(math.floor(value)))
+end
+```
+
+### 2.6 Самое простое окно (`GUILayout.Window`)
+
+```lua
+local Unity = CS.UnityEngine
+local GUI = Unity.GUI
+local GUILayout = Unity.GUILayout
+local Rect = Unity.Rect
+
+windowRect = windowRect or Rect(20, 40, 220, 120)
+
+function SimpleWindow(id)
+    GUILayout.Label("Это окно можно двигать")
+    if GUILayout.Button("Сообщение в чат") then
+        Chat:AddMessage("Кнопка в окне нажата", "[00FF00]")
+    end
+    GUI.DragWindow()
+end
+
+function OnGUI()
+    windowRect = GUILayout.Window(1, windowRect, SimpleWindow, "Simple Window")
+end
+```
+
+## 3. Базовая структура меню
+
+Ниже базовый шаблон с окном, перетаскиванием и кнопками:
+
+```lua
+local Unity = CS.UnityEngine
+local GUI = Unity.GUI
+local GUILayout = Unity.GUILayout
+local Rect = Unity.Rect
+
+showMenu = showMenu or true
+menuRect = menuRect or Rect(20, 40, 260, 190)
+godMode = godMode or false
+rayDistance = rayDistance or 12
+
+function MainWindow(id)
+    GUILayout.BeginVertical()
+
+    GUILayout.Label("Mod Menu")
+
+    godMode = GUILayout.Toggle(godMode, "God mode")
+
+    GUILayout.Label("Raycast distance: " .. tostring(math.floor(rayDistance)))
+    rayDistance = GUILayout.HorizontalSlider(rayDistance, 1, 250)
+    Player.RaycastDistance = rayDistance
+
+    if GUILayout.Button("Say hello") then
+        Chat:AddMessage("Hello from Lua UI", "[00FF00]")
+    end
+
+    if GUILayout.Button("Close") then
+        showMenu = false
+    end
+
+    GUILayout.EndVertical()
+    GUI.DragWindow()
+end
+
+function OnGUI()
+    if not showMenu then return end
+    menuRect = GUILayout.Window(100, menuRect, MainWindow, "Main")
+end
+```
+
+## 4. Полезные паттерны IMGUI
+
+Для мод-меню удобно использовать эти приемы:
+
+1. Несколько окон с разными `id`:
+- `GUILayout.Window(20, ...)`, `GUILayout.Window(21, ...)`, ...
+
+2. Переключение окон через toggle:
+- `showBuildWindow = GUILayout.Toggle(showBuildWindow, "Menu: Building")`
+
+3. Скролл для длинных списков:
+- `scroll = GUILayout.BeginScrollView(scroll, ...)`
+- `GUILayout.EndScrollView()`
+
+## 5. Многооконное меню (готовый шаблон)
+
+```lua
+local Unity = CS.UnityEngine
+local GUI = Unity.GUI
+local GUILayout = Unity.GUILayout
+local Rect = Unity.Rect
+
+showMenu = showMenu ~= false
+showWorldWindow = showWorldWindow or false
+showPlayerWindow = showPlayerWindow or false
+
+mainRect = mainRect or Rect(20, 40, 220, 170)
+worldRect = worldRect or Rect(250, 40, 300, 250)
+playerRect = playerRect or Rect(560, 40, 280, 240)
+
+hourValue = hourValue or Skybox.Hour
+speedValue = speedValue or 1
+
+function MainWindow(id)
+    GUILayout.BeginVertical()
+    showWorldWindow = GUILayout.Toggle(showWorldWindow, "World")
+    showPlayerWindow = GUILayout.Toggle(showPlayerWindow, "Player")
+    if GUILayout.Button("Hide all") then
+        showWorldWindow = false
+        showPlayerWindow = false
+    end
+    GUILayout.EndVertical()
+    GUI.DragWindow()
+end
+
+function WorldWindow(id)
+    GUILayout.BeginVertical()
+    GUILayout.Label("Hour: " .. tostring(math.floor(hourValue)))
+    hourValue = GUILayout.HorizontalSlider(hourValue, 0, 24)
+    Skybox.Hour = math.floor(hourValue)
+
+    if GUILayout.Button("Toggle time progress") then
+        Skybox.ProgressTime = not Skybox.ProgressTime
+    end
+
+    if GUILayout.Button("Place block near player") then
+        local p = Player.Position + Unity.Vector3(1, 0, 0)
+        World:AddBlock(p, CS.BlockType.Brick, CS.BlockKind.Default)
+    end
+    GUILayout.EndVertical()
+    GUI.DragWindow()
+end
+
+function PlayerWindow(id)
+    GUILayout.BeginVertical()
+    if GUILayout.Button("Fly") then
+        Player:EnableFly(not Player.IsFlying)
+    end
+    if GUILayout.Button("SpeedUp") then
+        Player:EnableSpeedUp(not Player.IsSpeedUp)
+    end
+
+    GUILayout.Label("Build/Hit speed: " .. tostring(speedValue))
+    speedValue = math.floor(GUILayout.HorizontalSlider(speedValue, 1, 10))
+    if GUILayout.Button("Apply BuildAndHitSpeedUp") then
+        Player:BuildAndHitSpeedUp(speedValue > 1)
+    end
+    GUILayout.EndVertical()
+    GUI.DragWindow()
+end
+
+function OnGUI()
+    if not showMenu then return end
+
+    mainRect = GUILayout.Window(20, mainRect, MainWindow, "Main")
+    if showWorldWindow then
+        worldRect = GUILayout.Window(21, worldRect, WorldWindow, "World")
+    end
+    if showPlayerWindow then
+        playerRect = GUILayout.Window(22, playerRect, PlayerWindow, "Player")
+    end
+end
+```
+
+## 6. Скролл-список (например, список пресетов/файлов)
+
+```lua
+local Unity = CS.UnityEngine
+local GUI = Unity.GUI
+local GUILayout = Unity.GUILayout
+local Rect = Unity.Rect
+
+showList = showList or true
+listRect = listRect or Rect(20, 220, 320, 300)
+scrollPos = scrollPos or Unity.Vector2(0, 0)
+selectedIndex = selectedIndex or -1
+
+items = items or {
+    "Preset_01", "Preset_02", "Preset_03", "Preset_04",
+    "Preset_05", "Preset_06", "Preset_07", "Preset_08"
+}
+
+function ListWindow(id)
+    scrollPos = GUILayout.BeginScrollView(scrollPos, GUILayout.Width(300), GUILayout.Height(240))
+    GUILayout.BeginVertical()
+
+    for i = 1, #items do
+        local caption = items[i]
+        if i - 1 == selectedIndex then
+            caption = "> " .. caption
+        end
+
+        if GUILayout.Button(caption) then
+            selectedIndex = i - 1 -- удобно, если дальше нужен 0-based индекс
+            Chat:AddMessage("Selected: " .. items[i], "[99CCFF]")
+        end
+    end
+
+    GUILayout.EndVertical()
+    GUILayout.EndScrollView()
+
+    if GUILayout.Button("Close") then
+        showList = false
+    end
+
+    GUI.DragWindow()
+end
+
+function OnGUI()
+    if showList then
+        listRect = GUILayout.Window(40, listRect, ListWindow, "List")
+    end
+end
+```
+
+## 7. Режим бинда клавиш (`Event.current`)
+
+Подход простой: нажал кнопку “bind”, затем следующая нажатая клавиша сохраняется.
+
+```lua
+local Unity = CS.UnityEngine
+local GUI = Unity.GUI
+local GUILayout = Unity.GUILayout
+local Rect = Unity.Rect
+local EventType = Unity.EventType
+local KeyCode = Unity.KeyCode
+
+bindRect = bindRect or Rect(360, 40, 240, 140)
+awaitingKeyBind = awaitingKeyBind or nil
+actionKey = actionKey or KeyCode.F
+
+local function keyName(k)
+    local s = tostring(k)
+    s = s:gsub("KeyCode%.", "")
+    s = s:gsub(":.*", "")
+    return s
+end
+
+function BindWindow(id)
+    GUILayout.BeginVertical()
+
+    if awaitingKeyBind == "actionKey" then
+        GUILayout.Label("Press any key...")
+    else
+        if GUILayout.Button("Bind action key: [" .. keyName(actionKey) .. "]") then
+            awaitingKeyBind = "actionKey"
+        end
+    end
+
+    GUILayout.EndVertical()
+    GUI.DragWindow()
+end
+
+function OnGUI()
+    bindRect = GUILayout.Window(50, bindRect, BindWindow, "Key Bind")
+
+    local ev = Unity.Event.current
+    if awaitingKeyBind and ev.type == EventType.KeyDown then
+        actionKey = ev.keyCode
+        awaitingKeyBind = nil
+        ev:Use() -- обязательно, чтобы событие не ушло дальше
+    end
+end
+```
+
+## 8. Кликабельная ссылка/текст в IMGUI
+
+```lua
+local Unity = CS.UnityEngine
+local GUI = Unity.GUI
+local Rect = Unity.Rect
+
+function OnGUI()
+    local style = Unity.GUIStyle(GUI.skin.label)
+    style.normal.textColor = Unity.Color(0.8, 0.4, 1, 1)
+
+    local text = "@my_mod_channel"
+    local size = style:CalcSize(Unity.GUIContent(text))
+    local r = Rect(20, 360, size.x, size.y)
+
+    GUI.Label(r, text, style)
+
+    local ev = Unity.Event.current
+    if r:Contains(ev.mousePosition) and ev.type == Unity.EventType.MouseDown then
+        Unity.Application.OpenURL("https://t.me/my_mod_channel")
+        ev:Use()
+    end
+end
+```
+
+## 9. Управление видимостью меню по горячей клавише
+
+Обычно делается в `Update()`, а не в `OnGUI()`.
+
+```lua
+local Unity = CS.UnityEngine
+showMenu = showMenu ~= false
+
+function Update()
+    if Unity.Input.GetKeyDown(Unity.KeyCode.Insert) then
+        showMenu = not showMenu
+    end
+end
+
+function OnGUI()
+    if not showMenu then return end
+    -- draw windows here
+end
+```
+
+## 10. Практические рекомендации
+
+1. Держите UI-state в глобальных переменных скрипта:
+- `showWindow`, `windowRect`, `scrollPos`, `selectedItem`.
+
+2. Для каждого окна используйте уникальный `id`:
+- конфликт id может ломать поведение окон.
+
+3. После временного изменения `GUI.backgroundColor` или `GUI.enabled` возвращайте исходное значение:
+- иначе стиль “утечет” на остальные элементы.
+
+4. Не перегружайте `OnGUI()` тяжелой логикой:
+- генерация мира, массовые операции, IO лучше в `Update()`/корутинах.
+
+5. Если обрабатываете `Event.current`, используйте `Event.current:Use()` после перехвата:
+- чтобы клик/клавиша не обрабатывались дважды.
+
+6. `GUI.DragWindow()` добавляйте в конец функции окна:
+- иначе окно не будет перетаскиваться.

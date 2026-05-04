@@ -1,0 +1,872 @@
+# Lua API для модов DiggerSteam
+
+Документ описывает Lua API, доступный мод-скриптам в игре.
+Фокус документа: практическое использование в модах.
+
+## 1. Быстрый старт
+
+### Что доступно в обычном Lua-скрипте объекта
+Если скрипт подключен через `LuaBehaviour`, внутри Lua уже есть:
+
+- `self` — объект `LuaBehaviour`
+- `transform` — трансформ объекта
+- `gameObject` — текущий GameObject
+- `Game`
+- `Chat`
+- `Player`
+- `World`
+- `Physics`
+- `Utils`
+- `Skybox`
+- дополнительные переменные из инъекций (`LuaBehaviourTag.Injections`)
+
+### Правило вызова
+
+- Методы: `Object:Method(...)`
+- Свойства: `Object.Property`
+- Для Unity/C# типов используйте `CS.*`, например:
+  - `CS.UnityEngine.Vector3(1,2,3)`
+  - `CS.BlockType.WoodPlank`
+
+### Минимальный шаблон
+
+```lua
+local Unity = CS.UnityEngine
+
+function Start()
+    Chat:AddMessage("Lua script started", "[00FF00]")
+end
+
+function Update()
+end
+
+function OnDestroy()
+end
+```
+
+## 2. Callback-функции LuaBehaviour
+
+Эти функции (если объявлены в Lua) вызываются движком автоматически:
+
+| Функция | Когда вызывается | Параметры |
+|---|---|---|
+| `awake()` | после привязки Lua-таблицы | нет |
+| `Start()` | старт объекта | нет |
+| `Update()` | каждый кадр | нет |
+| `OnDestroy()` | уничтожение объекта | нет |
+| `OnInteract()` | взаимодействие игрока с объектом | нет |
+| `OnInteractChild(go)` | взаимодействие с дочерним объектом | `go: GameObject` |
+| `OnLook()` | игрок навелся на объект | нет |
+| `OnHit()` | попадание/удар по объекту | нет |
+| `OnPlayerCollision()` | коллизия с игроком | нет |
+| `OnTriggerEnter(collider)` | вход в trigger | `collider: Collider` |
+| `ReceiveEvent(eventName, arg)` | получение события от `self:SendEvent` | `eventName: string`, `arg: object[]` |
+| `OnGUI()` | GUI-событие Unity | нет |
+| `OnRenderObject()` | рендер-событие Unity | нет |
+
+Важно для `ReceiveEvent`: `arg` — C#-массив, индексация обычно с `0` (`arg[0]`, `arg[1]`, ...).
+
+## 3. API объекта `self` (`LuaBehaviour`)
+
+### Методы
+
+### `self:IsOwner()`
+- Что делает: проверяет, является ли локальный клиент владельцем объекта.
+- Возвращает: `bool`.
+
+```lua
+if self:IsOwner() then
+    Chat:AddMessage("Я владелец объекта")
+end
+```
+
+### `self:SendEvent(eventName, cached, ...)`
+- Что делает: отправляет Lua-событие другим клиентам/экземплярам скрипта.
+- Параметры:
+  - `eventName: string`
+  - `cached: bool`
+  - `...` любые дополнительные аргументы
+- Возвращает: `nil`.
+
+```lua
+self:SendEvent("SwitchDoor", true, true) -- пример: кэшируем состояние "открыто"
+```
+
+### `self:GetPhotonView()`
+- Что делает: возвращает PhotonView объекта.
+- Возвращает: `PhotonView`.
+
+```lua
+local view = self:GetPhotonView()
+if view ~= nil then
+    Chat:AddMessage("ViewID: " .. tostring(view.viewID))
+end
+```
+
+### `self:AttachLuaScript([luaTable])`
+- Что делает: вручную перепривязывает Lua-скрипт.
+- Возвращает: `nil`.
+- Примечание: служебный метод, в обычных модах почти не нужен.
+
+### `self:DisposeLuaReference()`
+- Что делает: освобождает Lua-ссылки объекта.
+- Возвращает: `nil`.
+- Примечание: служебный метод.
+
+### Прочие доступные методы
+`self:OnInteract()`, `self:OnInteractChild(go)`, `self:OnRaycastStart()`, `self:OnHit()`, `self:Start()`
+
+Это публичные методы компонента. Обычно их не вызывают вручную из скрипта, а используют callback-функции раздела 2.
+
+### Свойства
+
+| Свойство | Тип | Доступ | Описание |
+|---|---|---|---|
+| `self.ItemDefenitionName` | `string` | чтение | имя ItemDefinition (если задан) |
+| `self.luaScript` | `TextAsset` | чтение/запись | исходный Lua-ассет |
+| `self.injections` | `Inject[]` | чтение/запись | инъекции |
+| `self.LuaScript` | `LuaTable` | чтение/запись | текущая Lua-таблица скрипта |
+| `self.Item` | `ItemDefinition` | чтение/запись | связанный item |
+
+## 4. `Game`
+
+### Свойства
+
+| Свойство | Тип | Доступ | Описание | Пример |
+|---|---|---|---|---|
+| `Game.TeleportToPlayers` | `bool` | чтение/запись | игровой флаг логики телепорта к игрокам | `Game.TeleportToPlayers = false` |
+
+## 5. `Chat`
+
+### Методы
+
+### `Chat:Start()`
+- Что делает: включает подписку на ошибки Lua в чат.
+- Возвращает: `nil`.
+
+```lua
+Chat:Start()
+```
+
+### `Chat:AddMessage(text [, color])`
+- Что делает: добавляет локальное сообщение в чат.
+- Параметры:
+  - `text: string`
+  - `color: string` (по умолчанию `"[FFFFFF]"`)
+- Возвращает: `nil`.
+
+```lua
+Chat:AddMessage("Привет, мир", "[00FF00]")
+```
+
+### `Chat:SendMessage(text [, color])`
+- Что делает: отправляет сообщение в игровой чат.
+- Параметры:
+  - `text: string`
+  - `color: string` (по умолчанию `"[FFFFFF]"`)
+- Возвращает: `nil`.
+
+```lua
+Chat:SendMessage("Я отправил сообщение в чат", "[FFD700]")
+```
+
+### `Chat:OnMessage(callback)`
+- Что делает: подписывает callback на ввод текста.
+- Параметры:
+  - `callback: function(text)`
+- Возвращает: `nil`.
+
+```lua
+Chat:OnMessage(function(text)
+    Chat:AddMessage("Вы ввели: " .. text, "[AAAAFF]")
+end)
+```
+
+### Свойства
+
+| Свойство | Тип | Доступ | Описание | Пример |
+|---|---|---|---|---|
+| `Chat.IsEnable` | `bool` | чтение | активен ли чат | `if Chat.IsEnable then ... end` |
+| `Chat.LogErrors` | `bool` | чтение/запись | печатать ли Lua-ошибки в чат | `Chat.LogErrors = true` |
+
+## 6. `Player`
+
+### Методы
+
+### `Player:TakeDamage(damage)`
+- Что делает: наносит урон локальному игроку.
+- Параметры: `damage: number`
+- Возвращает: `nil`.
+
+```lua
+Player:TakeDamage(5)
+```
+
+### `Player:OnPlayerCreated(callback)`
+- Что делает: подписывает callback на событие создания/старта игрока.
+- Параметры: `callback: function()`
+- Возвращает: `nil`.
+
+```lua
+Player:OnPlayerCreated(function()
+    Chat:AddMessage("Игрок создан")
+end)
+```
+
+### `Player:BuildAndHitSpeedUp(value)`
+- Что делает: ускоряет/возвращает скорость строительства и удара.
+- Параметры: `value: bool`
+- Возвращает: `nil`.
+
+```lua
+Player:BuildAndHitSpeedUp(true)
+```
+
+### `Player:IsControlVehicle(behaviour)`
+- Что делает: проверяет, управляет ли игрок транспортом, связанным с `LuaBehaviour`.
+- Параметры: `behaviour: LuaBehaviour`
+- Возвращает: `bool`.
+
+```lua
+if Player:IsControlVehicle(self) then
+    Chat:AddMessage("Игрок управляет этим транспортом")
+end
+```
+
+### `Player:EnableFly(value)`
+- Что делает: включает/выключает полет.
+- Параметры: `value: bool`
+- Возвращает: `nil`.
+
+```lua
+Player:EnableFly(true)
+```
+
+### `Player:EnableSpeedUp(value)`
+- Что делает: включает/выключает ускорение.
+- Параметры: `value: bool`
+- Возвращает: `nil`.
+
+```lua
+Player:EnableSpeedUp(true)
+```
+
+### `Player:TakeBan()`
+- Что делает: локально инициирует бан игрока.
+- Возвращает: `nil`.
+- Осторожно: административно опасная операция.
+
+### Свойства
+
+| Свойство | Тип | Доступ | Описание |
+|---|---|---|---|
+| `Player.Name` | `string` | чтение | ник игрока |
+| `Player.IsAdmin` | `bool` | чтение | права администратора |
+| `Player.IsModerator` | `bool` | чтение | права модератора |
+| `Player.IsBuilder` | `bool` | чтение | права строителя |
+| `Player.GetCurrentVehicle` | `GameObject or nil` | чтение | текущий транспорт |
+| `Player.IsInVehicle` | `bool` | чтение | игрок в транспорте |
+| `Player.IsFlying` | `bool` | чтение | включен ли режим полета |
+| `Player.IsSpeedUp` | `bool` | чтение | включено ли ускорение |
+| `Player.Camera` | `Camera` | чтение | камера игрока |
+| `Player.RaycastHit` | `RaycastHit` | чтение | текущее hit-состояние raycast |
+| `Player.RaycastDistance` | `number` | чтение/запись | дистанция raycast |
+| `Player.CurrentBlock` | `int` | чтение | выбранный тип блока |
+| `Player.CurrentKind` | `int` | чтение | выбранный kind блока |
+| `Player.Position` | `Vector3` | чтение/запись | позиция игрока |
+
+Примеры:
+
+```lua
+Chat:AddMessage("Игрок: " .. Player.Name)
+
+if Player.IsInVehicle then
+    local vehicle = Player.GetCurrentVehicle
+    if vehicle ~= nil then
+        Chat:AddMessage("Транспорт: " .. vehicle.name)
+    end
+end
+
+Player.RaycastDistance = 8.0
+Player.Position = CS.UnityEngine.Vector3(10, 20, 30)
+```
+
+## 7. `World`
+
+### Важное про координаты
+Внутри API координаты блока обрабатываются как `X, Z, Y`.
+Если передаете обычный Unity `Vector3(x, y, z)` напрямую, оси `Y/Z` для блочного мира фактически меняются местами.
+
+### Методы
+
+### `World:DestroySphereAreaAt(position, radius)`
+- Что делает: удаляет сферическую область блоков.
+- Параметры:
+  - `position: Vector3`
+  - `radius: int`
+- Возвращает: `nil`.
+
+```lua
+World:DestroySphereAreaAt(CS.UnityEngine.Vector3(50, 20, 50), 4)
+```
+
+### `World:AddBlock(position [, type [, kind]])`
+- Что делает: ставит блок.
+- Параметры:
+  - `position: Vector3`
+  - `type: int` (по умолчанию `7`)
+  - `kind: int` (по умолчанию `0`)
+- Возвращает: `nil`.
+
+```lua
+local V3 = CS.UnityEngine.Vector3
+World:AddBlock(V3(10, 20, 5), CS.BlockType.WoodPlank, 0)
+```
+
+### `World:RemoveBlock(position)`
+- Что делает: удаляет блок.
+- Параметры: `position: Vector3`
+- Возвращает: `nil`.
+
+```lua
+World:RemoveBlock(CS.UnityEngine.Vector3(10, 20, 5))
+```
+
+### `World:GetBlockType(position)`
+- Что делает: получает тип блока.
+- Параметры: `position: Vector3`
+- Возвращает: `int`.
+
+```lua
+local t = World:GetBlockType(CS.UnityEngine.Vector3(10, 20, 5))
+Chat:AddMessage("Type: " .. tostring(t))
+```
+
+### `World:GetBlockKind(position)`
+- Что делает: получает kind блока.
+- Параметры: `position: Vector3`
+- Возвращает: `int`.
+
+```lua
+local k = World:GetBlockKind(CS.UnityEngine.Vector3(10, 20, 5))
+Chat:AddMessage("Kind: " .. tostring(k))
+```
+
+### Свойства
+
+| Свойство | Тип | Доступ | Описание |
+|---|---|---|---|
+| `World.SizeX` | `int` | чтение | размер мира по X |
+| `World.SizeZ` | `int` | чтение | размер мира по Z |
+| `World.SizeY` | `int` | чтение | размер мира по Y |
+| `World.IsInfinite` | `bool` | чтение | `true` для InfiniteV6, иначе `false` |
+
+```lua
+Chat:AddMessage(("World size: X=%d Z=%d Y=%d"):format(World.SizeX, World.SizeZ, World.SizeY))
+
+if World.IsInfinite then
+    Chat:AddMessage("InfiniteV6 map")
+else
+    Chat:AddMessage("Legacy finite map")
+end
+```
+
+## 8. `Physics`
+
+### `Physics:Ray(ray, length)`
+- Что делает: делает Raycast.
+- Параметры:
+  - `ray: Ray`
+  - `length: int`
+- Возвращает: `hitOk: bool`, `hitInfo: RaycastHit`.
+
+```lua
+local cam = Player.Camera
+local ray = CS.UnityEngine.Ray(cam.transform.position, cam.transform.forward)
+local ok, hit = Physics:Ray(ray, 100)
+if ok then
+    Chat:AddMessage("Попадание в: " .. hit.collider.gameObject.name)
+end
+```
+
+## 9. `Utils`
+
+### `Utils:QuaternionLerp(target, a, b, t)`
+- Что делает: плавно выставляет `target.rotation = Quaternion.Lerp(a,b,t)`.
+- Параметры:
+  - `target: Transform`
+  - `a: Quaternion`
+  - `b: Quaternion`
+  - `t: number`
+- Возвращает: `nil`.
+
+```lua
+local tr = gameObject.transform
+local a = tr.rotation
+local b = CS.UnityEngine.Quaternion.Euler(0, 180, 0)
+Utils:QuaternionLerp(tr, a, b, 0.1)
+```
+
+### `Utils:AttachLuaFromTag(go)`
+- Что делает: если у объекта есть `LuaBehaviourTag`, добавляет `LuaBehaviour` и подключает скрипт.
+- Параметры: `go: GameObject`
+- Возвращает: `nil`.
+
+```lua
+local target = CS.UnityEngine.GameObject.Find("MyTaggedObject")
+if target ~= nil then
+    Utils:AttachLuaFromTag(target)
+end
+```
+
+## 10. `Skybox`
+
+### Методы
+
+### `Skybox:CreateDynamicSkybox()`
+- Что делает: создает динамический skybox, если его еще нет.
+- Возвращает: `nil`.
+
+```lua
+Skybox:CreateDynamicSkybox()
+```
+
+### Свойства
+
+| Свойство | Тип | Доступ | Описание | Пример |
+|---|---|---|---|---|
+| `Skybox.IsDynamic` | `bool` | чтение | активен ли динамический skybox | `if Skybox.IsDynamic then ... end` |
+| `Skybox.Hour` | `number` | чтение/запись | час суток | `Skybox.Hour = 14` |
+| `Skybox.ProgressTime` | `bool` | чтение/запись | идет ли время | `Skybox.ProgressTime = false` |
+| `Skybox.DayLengthInMinutes` | `number` | чтение/запись | длительность дня (мин) | `Skybox.DayLengthInMinutes = 20` |
+
+## 11. Дополнительно доступно в Lua
+
+### `Transform:FindDeepChild(name)`
+Доступно у `Transform` как extension-метод.
+Ищет дочерний объект по имени в ширину (BFS), рекурсивно.
+
+```lua
+local t = transform:FindDeepChild("DoorHandle")
+if t ~= nil then
+    Chat:AddMessage("Нашли: " .. t.name)
+end
+```
+
+### Enum-ы для блочного мира
+
+Использование:
+
+```lua
+World:AddBlock(CS.UnityEngine.Vector3(1,2,3), CS.BlockType.WoodPlank, CS.BlockKind.Default)
+```
+
+Полный список BlockType (250 значений):
+
+| Имя | Значение |
+|---|---|
+| `CS.BlockType.Air` | `0` |
+| `CS.BlockType.Dirt` | `1` |
+| `CS.BlockType.Light` | `2` |
+| `CS.BlockType.Lava` | `3` |
+| `CS.BlockType.Leaves` | `4` |
+| `CS.BlockType.Stone` | `5` |
+| `CS.BlockType.Wood` | `6` |
+| `CS.BlockType.WoodPlank` | `7` |
+| `CS.BlockType.Brick` | `8` |
+| `CS.BlockType.TopSoil` | `9` |
+| `CS.BlockType.WoodPlank2` | `10` |
+| `CS.BlockType.Brick2` | `11` |
+| `CS.BlockType.WoodPlank3` | `12` |
+| `CS.BlockType.WoodPlank4` | `13` |
+| `CS.BlockType.Brick3` | `14` |
+| `CS.BlockType.Brick4` | `15` |
+| `CS.BlockType.Brick5` | `16` |
+| `CS.BlockType.Brick6` | `17` |
+| `CS.BlockType.WoodPlank5` | `18` |
+| `CS.BlockType.Colored1` | `19` |
+| `CS.BlockType.Colored2` | `20` |
+| `CS.BlockType.Colored3` | `21` |
+| `CS.BlockType.Colored4` | `22` |
+| `CS.BlockType.Colored5` | `23` |
+| `CS.BlockType.Colored6` | `24` |
+| `CS.BlockType.Colored7` | `25` |
+| `CS.BlockType.Colored8` | `26` |
+| `CS.BlockType.Colored9` | `27` |
+| `CS.BlockType.Brick7` | `28` |
+| `CS.BlockType.Stone17` | `29` |
+| `CS.BlockType.Stone17_1` | `30` |
+| `CS.BlockType.Stone17_2` | `31` |
+| `CS.BlockType.Stone9` | `32` |
+| `CS.BlockType.Stone9_2` | `33` |
+| `CS.BlockType.Stone10` | `34` |
+| `CS.BlockType.Stone10_1` | `35` |
+| `CS.BlockType.Stone14` | `36` |
+| `CS.BlockType.Stone14_1` | `37` |
+| `CS.BlockType.Stone14_2` | `38` |
+| `CS.BlockType.Stone14_3` | `39` |
+| `CS.BlockType.Stone14_4` | `40` |
+| `CS.BlockType.Stone4_1` | `41` |
+| `CS.BlockType.Stone4_2` | `42` |
+| `CS.BlockType.Stone15` | `43` |
+| `CS.BlockType.Stone15_1` | `44` |
+| `CS.BlockType.Stone15_2` | `45` |
+| `CS.BlockType.Stone15_3` | `46` |
+| `CS.BlockType.Stone16` | `47` |
+| `CS.BlockType.Stone16_1` | `48` |
+| `CS.BlockType.Stone16_2` | `49` |
+| `CS.BlockType.Stone16_3` | `50` |
+| `CS.BlockType.Stone18` | `51` |
+| `CS.BlockType.Stone18_1` | `52` |
+| `CS.BlockType.Stone18_2` | `53` |
+| `CS.BlockType.Stone19` | `54` |
+| `CS.BlockType.Stone19_1` | `55` |
+| `CS.BlockType.Stone19_2` | `56` |
+| `CS.BlockType.Water` | `57` |
+| `CS.BlockType.Coal` | `58` |
+| `CS.BlockType.Iron` | `59` |
+| `CS.BlockType.Sand` | `60` |
+| `CS.BlockType.Gold` | `61` |
+| `CS.BlockType.Crates` | `62` |
+| `CS.BlockType.Wood8` | `63` |
+| `CS.BlockType.Wood9` | `64` |
+| `CS.BlockType.Wood10` | `65` |
+| `CS.BlockType.Wood11` | `66` |
+| `CS.BlockType.Glass1` | `67` |
+| `CS.BlockType.Glass2` | `68` |
+| `CS.BlockType.Glass3` | `69` |
+| `CS.BlockType.Glass4` | `70` |
+| `CS.BlockType.Glass5` | `71` |
+| `CS.BlockType.Glass6` | `72` |
+| `CS.BlockType.Glass7` | `73` |
+| `CS.BlockType.Glass8` | `74` |
+| `CS.BlockType.Glass9` | `75` |
+| `CS.BlockType.Reshetka1` | `76` |
+| `CS.BlockType.Reshetka2` | `77` |
+| `CS.BlockType.Reshetka3` | `78` |
+| `CS.BlockType.Reshetka4` | `79` |
+| `CS.BlockType.Reshetka5` | `80` |
+| `CS.BlockType.Snow` | `81` |
+| `CS.BlockType.SnowDirt` | `82` |
+| `CS.BlockType.Ice` | `83` |
+| `CS.BlockType.Gum` | `84` |
+| `CS.BlockType.TeamBlue` | `85` |
+| `CS.BlockType.TeamRed` | `86` |
+| `CS.BlockType.Tile1` | `87` |
+| `CS.BlockType.Tile2` | `88` |
+| `CS.BlockType.Tile3` | `89` |
+| `CS.BlockType.Tile4` | `90` |
+| `CS.BlockType.Tile5` | `91` |
+| `CS.BlockType.Castle01_Wall` | `92` |
+| `CS.BlockType.Castle02_Wall` | `93` |
+| `CS.BlockType.Castle03_Floor` | `94` |
+| `CS.BlockType.Castle04_Floor` | `95` |
+| `CS.BlockType.Castle05_Floor` | `96` |
+| `CS.BlockType.Castle06` | `97` |
+| `CS.BlockType.Castle07_Grate` | `98` |
+| `CS.BlockType.Castle08_Wall` | `99` |
+| `CS.BlockType.Castle09` | `100` |
+| `CS.BlockType.Dungeon01_Wall` | `101` |
+| `CS.BlockType.Dungeon02_Floor` | `102` |
+| `CS.BlockType.Dungeon03` | `103` |
+| `CS.BlockType.Dungeon04_Wall` | `104` |
+| `CS.BlockType.Dungeon05_FloorElement` | `105` |
+| `CS.BlockType.Dungeon06_WallBottom` | `106` |
+| `CS.BlockType.Dungeon07_WallElement` | `107` |
+| `CS.BlockType.Dungeon08_WoodBar` | `108` |
+| `CS.BlockType.Dungeon09_WoodBox` | `109` |
+| `CS.BlockType.Dungeon10_Grate` | `110` |
+| `CS.BlockType.Dungeon11_WallElement` | `111` |
+| `CS.BlockType.Dungeon12_Floor` | `112` |
+| `CS.BlockType.Dungeon13_Floor` | `113` |
+| `CS.BlockType.Fortress01_Floor` | `114` |
+| `CS.BlockType.Fortress02_Wall` | `115` |
+| `CS.BlockType.Fortress03_Floor` | `116` |
+| `CS.BlockType.Fortress04_Wall` | `117` |
+| `CS.BlockType.Fortress05_Wall` | `118` |
+| `CS.BlockType.Fortress06_Wall` | `119` |
+| `CS.BlockType.Fortress07_Floor` | `120` |
+| `CS.BlockType.Fortress08_Grate` | `121` |
+| `CS.BlockType.Fortress09_WoodBox` | `122` |
+| `CS.BlockType.Fortress10_WoodBar` | `123` |
+| `CS.BlockType.Library01_WallBottom` | `124` |
+| `CS.BlockType.Library02_Floor` | `125` |
+| `CS.BlockType.Library03_Floor` | `126` |
+| `CS.BlockType.Library04_Wall` | `127` |
+| `CS.BlockType.Library05_WallElement` | `128` |
+| `CS.BlockType.Library06_BookShelf` | `129` |
+| `CS.BlockType.Library07` | `130` |
+| `CS.BlockType.Tavern01_WallBottom` | `131` |
+| `CS.BlockType.Tavern02_Wall` | `132` |
+| `CS.BlockType.Tavern03_WallElement` | `133` |
+| `CS.BlockType.Tavern04_WoodBox` | `134` |
+| `CS.BlockType.Tavern05_Floor` | `135` |
+| `CS.BlockType.Tavern06_Wall` | `136` |
+| `CS.BlockType.Tavern07_Wall` | `137` |
+| `CS.BlockType.Tavern08_FloorElement` | `138` |
+| `CS.BlockType.Tavern09_WoodBar` | `139` |
+| `CS.BlockType.Tavern10_WallBottom` | `140` |
+| `CS.BlockType.Tavern11_WallBottom` | `141` |
+| `CS.BlockType.Tile7` | `142` |
+| `CS.BlockType.Tile9` | `143` |
+| `CS.BlockType.Military01` | `144` |
+| `CS.BlockType.Military02` | `145` |
+| `CS.BlockType.Military03` | `146` |
+| `CS.BlockType.Military04` | `147` |
+| `CS.BlockType.Military05` | `148` |
+| `CS.BlockType.Military06` | `149` |
+| `CS.BlockType.Military07` | `150` |
+| `CS.BlockType.Military08` | `151` |
+| `CS.BlockType.Military09` | `152` |
+| `CS.BlockType.Military10` | `153` |
+| `CS.BlockType.Military11` | `154` |
+| `CS.BlockType.Military12` | `155` |
+| `CS.BlockType.Industrial01` | `156` |
+| `CS.BlockType.Industrial02` | `157` |
+| `CS.BlockType.Industrial03` | `158` |
+| `CS.BlockType.Industrial04` | `159` |
+| `CS.BlockType.Industrial05` | `160` |
+| `CS.BlockType.Industrial06` | `161` |
+| `CS.BlockType.Industrial07` | `162` |
+| `CS.BlockType.Industrial08` | `163` |
+| `CS.BlockType.Industrial09` | `164` |
+| `CS.BlockType.Industrial10` | `165` |
+| `CS.BlockType.Industrial11` | `166` |
+| `CS.BlockType.Industrial12` | `167` |
+| `CS.BlockType.DarkCastle01` | `168` |
+| `CS.BlockType.DarkCastle02` | `169` |
+| `CS.BlockType.DarkCastle03` | `170` |
+| `CS.BlockType.DarkCastle04` | `171` |
+| `CS.BlockType.DarkCastle05` | `172` |
+| `CS.BlockType.DarkCastle06` | `173` |
+| `CS.BlockType.DarkCastle07` | `174` |
+| `CS.BlockType.DarkCastle08` | `175` |
+| `CS.BlockType.DarkCastle09` | `176` |
+| `CS.BlockType.DarkCastle10` | `177` |
+| `CS.BlockType.DarkCastle11` | `178` |
+| `CS.BlockType.DarkCastle12` | `179` |
+| `CS.BlockType.DarkCastle13` | `180` |
+| `CS.BlockType.DarkCastle14` | `181` |
+| `CS.BlockType.DarkCastle15` | `182` |
+| `CS.BlockType.DarkCastle16` | `183` |
+| `CS.BlockType.DarkCastle17` | `184` |
+| `CS.BlockType.DarkCastle18` | `185` |
+| `CS.BlockType.DarkCastle19` | `186` |
+| `CS.BlockType.DarkCastle20` | `187` |
+| `CS.BlockType.HideWhenStep` | `188` |
+| `CS.BlockType.RestoreWhenStep` | `189` |
+| `CS.BlockType.CityInterio01` | `190` |
+| `CS.BlockType.CityInterio02` | `191` |
+| `CS.BlockType.CityInterio03` | `192` |
+| `CS.BlockType.CityInterio04` | `193` |
+| `CS.BlockType.CityInterio05` | `194` |
+| `CS.BlockType.CityInterio06` | `195` |
+| `CS.BlockType.CityInterio07` | `196` |
+| `CS.BlockType.CityInterio08` | `197` |
+| `CS.BlockType.CityInterio09` | `198` |
+| `CS.BlockType.CityInterio10` | `199` |
+| `CS.BlockType.CityInterio11` | `200` |
+| `CS.BlockType.CityInterio12` | `201` |
+| `CS.BlockType.CityInterio13` | `202` |
+| `CS.BlockType.CityInterio14` | `203` |
+| `CS.BlockType.CityInterio15` | `204` |
+| `CS.BlockType.CityInterio16` | `205` |
+| `CS.BlockType.CityInterio17` | `206` |
+| `CS.BlockType.CityInterio18` | `207` |
+| `CS.BlockType.CityInterio19` | `208` |
+| `CS.BlockType.CityInterio20` | `209` |
+| `CS.BlockType.CityInterio21` | `210` |
+| `CS.BlockType.CityExterior01` | `211` |
+| `CS.BlockType.CityExterior02` | `212` |
+| `CS.BlockType.CityExterior03` | `213` |
+| `CS.BlockType.CityExterior04` | `214` |
+| `CS.BlockType.CityExterior05` | `215` |
+| `CS.BlockType.CityExterior06` | `216` |
+| `CS.BlockType.CityExterior07` | `217` |
+| `CS.BlockType.CityExterior08` | `218` |
+| `CS.BlockType.CityExterior09` | `219` |
+| `CS.BlockType.CityExterior10` | `220` |
+| `CS.BlockType.CityExterior11` | `221` |
+| `CS.BlockType.CityExterior12` | `222` |
+| `CS.BlockType.CityExterior13` | `223` |
+| `CS.BlockType.CityExterior14` | `224` |
+| `CS.BlockType.CityExterior15` | `225` |
+| `CS.BlockType.CityExterior16` | `226` |
+| `CS.BlockType.CityExterior17` | `227` |
+| `CS.BlockType.CityExterior18` | `228` |
+| `CS.BlockType.CityExterior19` | `229` |
+| `CS.BlockType.CityExterior20` | `230` |
+| `CS.BlockType.CityExterior21` | `231` |
+| `CS.BlockType.CityExterior22` | `232` |
+| `CS.BlockType.CityExterior23` | `233` |
+| `CS.BlockType.CityExterior24` | `234` |
+| `CS.BlockType.CityExterior25` | `235` |
+| `CS.BlockType.CityExterior26` | `236` |
+| `CS.BlockType.CityExterior27` | `237` |
+| `CS.BlockType.CityExterior28` | `238` |
+| `CS.BlockType.CityExterior29` | `239` |
+| `CS.BlockType.CityExterior30` | `240` |
+| `CS.BlockType.NbBlue` | `241` |
+| `CS.BlockType.NbGray` | `242` |
+| `CS.BlockType.NbDarkGrey` | `243` |
+| `CS.BlockType.NbBrown` | `244` |
+| `CS.BlockType.NbBeige` | `245` |
+| `CS.BlockType.NbKhaki` | `246` |
+| `CS.BlockType.Autumn1` | `247` |
+| `CS.BlockType.Autumn2` | `248` |
+| `CS.BlockType.Autumn3` | `249` |
+
+Полный список BlockKind (102 значения):
+
+| Имя | Значение |
+|---|---|
+| `CS.BlockKind.Default` | `0` |
+| `CS.BlockKind.Half` | `1` |
+| `CS.BlockKind.Fence` | `2` |
+| `CS.BlockKind.DiagonalWest` | `3` |
+| `CS.BlockKind.DiagonalEast` | `4` |
+| `CS.BlockKind.DiagonalSouth` | `5` |
+| `CS.BlockKind.DiagonalNorth` | `6` |
+| `CS.BlockKind.StairNorth` | `7` |
+| `CS.BlockKind.StairSouth` | `8` |
+| `CS.BlockKind.StairWest` | `9` |
+| `CS.BlockKind.StairEast` | `10` |
+| `CS.BlockKind.HalfWallNorth` | `11` |
+| `CS.BlockKind.HalfWallSouth` | `12` |
+| `CS.BlockKind.HalfWallEast` | `13` |
+| `CS.BlockKind.HalfWallWest` | `14` |
+| `CS.BlockKind.Quarter` | `16` |
+| `CS.BlockKind.QuarterOnWallEast` | `17` |
+| `CS.BlockKind.QuarterOnWallNorth` | `18` |
+| `CS.BlockKind.QuarterOnWallSouth` | `19` |
+| `CS.BlockKind.QuarterOnWallWest` | `20` |
+| `CS.BlockKind.FenceOnWallSouthNorth` | `21` |
+| `CS.BlockKind.FenceOnWallEastWest` | `22` |
+| `CS.BlockKind.Third` | `25` |
+| `CS.BlockKind.ThirdOnWallEast` | `26` |
+| `CS.BlockKind.ThirdOnWallWest` | `27` |
+| `CS.BlockKind.ThirdOnWallSouth` | `28` |
+| `CS.BlockKind.ThirdOnWallNorth` | `29` |
+| `CS.BlockKind.DiagonalOnWallWestRight` | `30` |
+| `CS.BlockKind.DiagonalOnWallWestLeft` | `31` |
+| `CS.BlockKind.DiagonalOnWallWestTop` | `32` |
+| `CS.BlockKind.DiagonalOnWallWestBottom` | `33` |
+| `CS.BlockKind.DiagonalOnWallEastRight` | `34` |
+| `CS.BlockKind.DiagonalOnWallEastLeft` | `35` |
+| `CS.BlockKind.DiagonalOnWallEastTop` | `36` |
+| `CS.BlockKind.DiagonalOnWallEastBottom` | `37` |
+| `CS.BlockKind.DiagonalOnWallSouthRight` | `38` |
+| `CS.BlockKind.DiagonalOnWallSouthLeft` | `39` |
+| `CS.BlockKind.DiagonalOnWallSouthTop` | `40` |
+| `CS.BlockKind.DiagonalOnWallSouthBottom` | `41` |
+| `CS.BlockKind.DiagonalOnWallNorthRight` | `42` |
+| `CS.BlockKind.DiagonalOnWallNorthLeft` | `43` |
+| `CS.BlockKind.DiagonalOnWallNorthTop` | `44` |
+| `CS.BlockKind.DiagonalOnWallNorthBottom` | `45` |
+| `CS.BlockKind.StairOnWallNorthRight` | `46` |
+| `CS.BlockKind.StairOnWallNorthLeft` | `47` |
+| `CS.BlockKind.StairOnWallNorthTop` | `48` |
+| `CS.BlockKind.StairOnWallNorthBottom` | `49` |
+| `CS.BlockKind.StairOnWallSouthRight` | `50` |
+| `CS.BlockKind.StairOnWallSouthLeft` | `51` |
+| `CS.BlockKind.StairOnWallSouthTop` | `52` |
+| `CS.BlockKind.StairOnWallSouthBottom` | `53` |
+| `CS.BlockKind.StairOnWallWestRight` | `54` |
+| `CS.BlockKind.StairOnWallWestLeft` | `55` |
+| `CS.BlockKind.StairOnWallWestTop` | `56` |
+| `CS.BlockKind.StairOnWallWestBottom` | `57` |
+| `CS.BlockKind.StairOnWallEastRight` | `58` |
+| `CS.BlockKind.StairOnWallEastLeft` | `59` |
+| `CS.BlockKind.StairOnWallEastTop` | `60` |
+| `CS.BlockKind.StairOnWallEastBottom` | `61` |
+| `CS.BlockKind.CornerEast` | `62` |
+| `CS.BlockKind.CornerWest` | `63` |
+| `CS.BlockKind.CornerNorth` | `64` |
+| `CS.BlockKind.CornerSouth` | `65` |
+| `CS.BlockKind.FenceWest` | `66` |
+| `CS.BlockKind.FenceEast` | `67` |
+| `CS.BlockKind.FenceNorth` | `68` |
+| `CS.BlockKind.FenceSouth` | `69` |
+| `CS.BlockKind.EastFenceWest` | `70` |
+| `CS.BlockKind.EastFenceEast` | `71` |
+| `CS.BlockKind.EastFenceNorth` | `72` |
+| `CS.BlockKind.EastFenceSouth` | `73` |
+| `CS.BlockKind.WestFenceWest` | `74` |
+| `CS.BlockKind.WestFenceEast` | `75` |
+| `CS.BlockKind.WestFenceNorth` | `76` |
+| `CS.BlockKind.WestFenceSouth` | `77` |
+| `CS.BlockKind.NorthFenceWest` | `78` |
+| `CS.BlockKind.NorthFenceEast` | `79` |
+| `CS.BlockKind.NorthFenceNorth` | `80` |
+| `CS.BlockKind.NorthFenceSouth` | `81` |
+| `CS.BlockKind.SouthFenceWest` | `82` |
+| `CS.BlockKind.SouthFenceEast` | `83` |
+| `CS.BlockKind.SouthFenceNorth` | `84` |
+| `CS.BlockKind.SouthFenceSouth` | `85` |
+| `CS.BlockKind.CornerStairEast` | `86` |
+| `CS.BlockKind.CornerStairWest` | `87` |
+| `CS.BlockKind.CornerStairSouth` | `88` |
+| `CS.BlockKind.CornerStairNorth` | `89` |
+| `CS.BlockKind.Flip` | `128` |
+| `CS.BlockKind.HalfFlip` | `129` |
+| `CS.BlockKind.DiagonalWestFlip` | `131` |
+| `CS.BlockKind.DiagonalEastFlip` | `132` |
+| `CS.BlockKind.DiagonalSouthFlip` | `133` |
+| `CS.BlockKind.DiagonalNorthFlip` | `134` |
+| `CS.BlockKind.StairNorthFlip` | `135` |
+| `CS.BlockKind.StairSouthFlip` | `136` |
+| `CS.BlockKind.StairWestFlip` | `137` |
+| `CS.BlockKind.StairEastFlip` | `138` |
+| `CS.BlockKind.QuarterFlip` | `144` |
+| `CS.BlockKind.ThirdFlip` | `153` |
+| `CS.BlockKind.DiagonalEastFlip2` | `161` |
+| `CS.BlockKind.DiagonalWestFlip2` | `165` |
+| `CS.BlockKind.DiagonalNorthFlip2` | `173` |
+
+
+
+
+## 13. Частые паттерны
+
+### 13.1 Событие с синхронизацией состояния
+
+```lua
+local isOpen = false
+
+function OnInteract()
+    isOpen = not isOpen
+    self:SendEvent("SwitchState", true, isOpen)
+end
+
+function ReceiveEvent(eventName, arg)
+    if eventName == "SwitchState" then
+        local value = arg[0]
+        Chat:AddMessage("Новое состояние: " .. tostring(value))
+    end
+end
+```
+
+### 13.2 Поставить блок перед игроком
+
+```lua
+function OnInteract()
+    local cam = Player.Camera
+    local pos = cam.transform.position + cam.transform.forward * 3
+    World:AddBlock(pos, CS.BlockType.Brick, CS.BlockKind.Default)
+end
+```
+
+### 13.3 Проверка лучом и вывод в чат
+
+```lua
+function Update()
+    local cam = Player.Camera
+    local ray = CS.UnityEngine.Ray(cam.transform.position, cam.transform.forward)
+    local ok, hit = Physics:Ray(ray, 15)
+    if ok and hit.collider ~= nil then
+        -- Можно ограничить частоту вывода, чтобы не спамить в чат каждый кадр
+    end
+end
+```
+
+---
