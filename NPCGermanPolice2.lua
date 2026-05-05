@@ -327,15 +327,39 @@ function ReceiveEvent(eventName, arg)
     
     -- 🔧 БЕЗОПАСНОЕ ПОЛУЧЕНИЕ ПЕРВОГО ЭЛЕМЕНТА
     local firstArg = nil
-    local success, result = pcall(function() return arg[0] end)
-    if success and result ~= nil then
-        firstArg = result
+    
+    -- Проверяем длину массива перед доступом
+    local argLength = 0
+    local success, lenResult = pcall(function() 
+        if type(arg) == "table" then
+            return #arg 
+        end
+        return 0
+    end)
+    if success and lenResult and lenResult > 0 then
+        argLength = lenResult
+    end
+    
+    if argLength > 0 then
+        success, firstArg = pcall(function() return arg[0] end)
+        if not success or firstArg == nil then
+            success, firstArg = pcall(function() return arg[1] end)
+            if not success or firstArg == nil then
+                return
+            end
+        end
     else
-        -- Пробуем 1-индексацию как запасной вариант
-        success, result = pcall(function() return arg[1] end)
-        if success and result ~= nil then
-            firstArg = result
-        else
+        -- Если массив пустой, пробуем получить данные напрямую из arg
+        if type(arg) == "string" then
+            firstArg = arg
+        elseif type(arg) == "table" then
+            -- Пробуем получить первое значение из таблицы
+            for _, v in pairs(arg) do
+                firstArg = v
+                break
+            end
+        end
+        if firstArg == nil then
             return
         end
     end
@@ -467,14 +491,14 @@ end
 
 local function ValidateWantedLevel(playerName)
     if not playerName or playerName == "Unknown" then return end
-    
+
     local wd = wantedData[playerName]
     if not wd then return end
-    
+
     local needsUpdate = false
     local playerPos = Player.Position
     local npcPos = transform.position
-    
+
     if playerPos and npcPos then
         local dist = unity.Vector3.Distance(playerPos, npcPos)
         if dist > CHASE_RADIUS * 2 then
@@ -487,23 +511,23 @@ local function ValidateWantedLevel(playerName)
             end
         end
     end
-    
+
     if wd.pursuitTimer and (wd.pursuitTimer < 0 or wd.pursuitTimer > 3600) then
         wd.pursuitTimer = 0
         needsUpdate = true
     end
-    
+
     if wd.star1 == false and (wd.star2 or wd.star3) then
         wd.star2 = false
         wd.star3 = false
         needsUpdate = true
     end
-    
+
     if wd.star2 == false and wd.star3 then
         wd.star3 = false
         needsUpdate = true
     end
-    
+
     if needsUpdate then
         WriteWantedCache()
         BroadcastWantedForPlayer(playerName)
@@ -623,7 +647,7 @@ function Start()
     ReadWantedCache()
     local myName = GetLocalPlayerName()
     ValidateWantedLevel(myName)
-    
+
     BroadcastState()
     BroadcastPosition(true)
     BroadcastCar(policeCar and policeCar.activeSelf, policeCar and policeCar.transform.position, policeCar and policeCar.transform.eulerAngles)
@@ -706,7 +730,7 @@ function Update()
         ValidateWantedLevel(myName)
         WriteWantedCache()
     end
-    
+
     ValidateWantedLevel(myName)
 
     -- === Админ-управление ===
