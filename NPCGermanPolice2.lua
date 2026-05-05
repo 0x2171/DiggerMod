@@ -634,14 +634,21 @@ function Start()
     end
 
     -- === Загрузка текстур ===
-    if ARREST_IMAGE_URL and ARREST_IMAGE_URL ~= "" then
-        textureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(ARREST_IMAGE_URL)
-        textureRequest:SendWebRequest()
-    end
-    if STAR_ICON_URL and STAR_ICON_URL ~= "" then
-        starTextureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(STAR_ICON_URL)
-        starTextureRequest:SendWebRequest()
-    end
+	if ARREST_IMAGE_URL and ARREST_IMAGE_URL ~= "" then
+		CS.UnityEngine.Debug.Log("[NPCGermanPolice2] Загрузка картинки ареста: " .. ARREST_IMAGE_URL)
+		textureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(ARREST_IMAGE_URL)
+		textureRequest:SendWebRequest()
+	else
+		CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] ARREST_IMAGE_URL не задан!")
+	end
+
+	if STAR_ICON_URL and STAR_ICON_URL ~= "" then
+		CS.UnityEngine.Debug.Log("[NPCGermanPolice2] Загрузка иконки звезды: " .. STAR_ICON_URL)
+		starTextureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(STAR_ICON_URL)
+		starTextureRequest:SendWebRequest()
+	else
+		CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] STAR_ICON_URL не задан!")
+	end
 
     -- === Инициализация кэша ===
     ReadWantedCache()
@@ -1031,14 +1038,35 @@ function Update()
 end
 
 function OnGUI()
-    if isArrestedLocal and arrestTexture ~= nil then
-        local sw = unity.Screen.width
-        local sh = unity.Screen.height
-        local rect = unity.Rect(sw - 220, sh - 220, 200, 200)
-        unity.GUI.DrawTexture(rect, arrestTexture)
+    -- === Отображение картинки ареста ===
+    if isArrestedLocal then
+        if arrestTexture == nil then
+            CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] OnGUI: arrestTexture is nil, cannot draw")
+        elseif arrestTexture.width == 0 or arrestTexture.height == 0 then
+            CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] OnGUI: arrestTexture has invalid size")
+        else
+            local sw = unity.Screen.width
+            local sh = unity.Screen.height
+            local rect = unity.Rect(sw - 220, sh - 220, 200, 200)
+            unity.GUI.DrawTexture(rect, arrestTexture)
+            -- Однократный лог при успешной отрисовке (опционально, можно закомментировать)
+            -- CS.UnityEngine.Debug.Log("[NPCGermanPolice2] 🎨 Drew arrest texture")
+        end
     end
 
-    if starTexture ~= nil then
+    -- === Отображение звёзд розыска ===
+    if starTexture == nil then
+        -- Логируем только один раз, чтобы не спамить консоль
+        if not _starTextureWarned then
+            CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] OnGUI: starTexture is nil, cannot draw stars")
+            _starTextureWarned = true
+        end
+    elseif starTexture.width == 0 or starTexture.height == 0 then
+        if not _starTextureWarned then
+            CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] OnGUI: starTexture has invalid size")
+            _starTextureWarned = true
+        end
+    else
         local myName = GetLocalPlayerName()
         local wd = wantedData[myName] or {star1=false, star2=false, star3=false}
         local sw = unity.Screen.width
@@ -1058,7 +1086,7 @@ function OnGUI()
             local x = rightMostX - offset
             local rect = unity.Rect(x, startY, iconSize, iconSize)
 
-            unity.GUI.color = isActive and unity.Color(1,1,1,1) or unity.Color(0.5,0.5,0.5,1)
+            unity.GUI.color = isActive and unity.Color(1,1,1,1) or unity.Color(0.5,0.5,0.5,0.7)
             unity.GUI.DrawTexture(rect, starTexture)
         end
         unity.GUI.color = unity.Color(1,1,1,1)
