@@ -441,6 +441,57 @@ local function GetPlayerWanted(playerName)
     return wantedData[playerName] or {star1=false, star2=false, star3=false, pursuitTimer=0}
 end
 
+-- Проверка и очистка недействительных звёзд розыска
+local function ValidateWantedLevel(playerName)
+    if not playerName or playerName == "Unknown" then return end
+    
+    local wd = wantedData[playerName]
+    if not wd then return end
+    
+    local needsUpdate = false
+    local playerPos = Player.Position
+    local npcPos = transform.position
+    
+    -- Если игрок далеко от NPC (> CHASE_RADIUS), сбрасываем таймер преследования
+    if playerPos and npcPos then
+        local dist = unity.Vector3.Distance(playerPos, npcPos)
+        if dist > CHASE_RADIUS * 2 then
+            -- Игрок слишком далеко - сбрасываем все звёзды и таймер
+            if wd.star1 or wd.star2 or wd.star3 or (wd.pursuitTimer and wd.pursuitTimer > 0) then
+                wd.star1 = false
+                wd.star2 = false
+                wd.star3 = false
+                wd.pursuitTimer = 0
+                needsUpdate = true
+            end
+        end
+    end
+    
+    -- Сброс таймера если он отрицательный или слишком большой (защита от коррупции данных)
+    if wd.pursuitTimer and (wd.pursuitTimer < 0 or wd.pursuitTimer > 3600) then
+        wd.pursuitTimer = 0
+        needsUpdate = true
+    end
+    
+    -- Если нет star1, то star2 и star3 тоже должны быть false
+    if wd.star1 == false and (wd.star2 or wd.star3) then
+        wd.star2 = false
+        wd.star3 = false
+        needsUpdate = true
+    end
+    
+    -- Если нет star2, то star3 должен быть false
+    if wd.star2 == false and wd.star3 then
+        wd.star3 = false
+        needsUpdate = true
+    end
+    
+    if needsUpdate then
+        WriteWantedCache()
+        BroadcastWantedForPlayer(playerName)
+    end
+end
+
 local function UpdatePlayerWanted(playerName, field, value)
     wantedData[playerName] = wantedData[playerName] or {}
     wantedData[playerName][field] = value
@@ -560,6 +611,11 @@ function Start()
 
     -- === Инициализация кэша и синхронизация ===
     ReadWantedCache()
+    
+    -- === Проверка валидности уровня розыска при спавне ===
+    local myName = GetLocalPlayerName()
+    ValidateWantedLevel(myName)
+    
     BroadcastState()
     BroadcastPosition(true)
     BroadcastCar(policeCar and policeCar.activeSelf, policeCar and policeCar.transform.position, policeCar and policeCar.transform.eulerAngles)
@@ -640,8 +696,12 @@ function Update()
     if fileReadTimer >= FILE_READ_INTERVAL then
         fileReadTimer = 0
         ReadWantedCache()
+        ValidateWantedLevel(myName)
         WriteWantedCache()
     end
+    
+    -- === Периодическая проверка валидности розыска ===
+    ValidateWantedLevel(myName)
 
     -- === Админ-управление (локально + синхронизация) ===
     if Player.IsAdmin then
