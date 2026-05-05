@@ -27,7 +27,7 @@ local STAR_ICON_URL = "https://raw.githubusercontent.com/0x2171/DiggerMod/refs/h
 -- === ПУТЬ К ФАЙЛУ (ЛОКАЛЬНЫЙ КЭШ) ===
 local PROPERTIES_FILE_PATH = "C:\\\\DANZIG\\\\properties.json"
 local PURSUIT_TIME_FOR_SECOND_STAR = 20.0
-local MIN_PLAYERS_FOR_THIRD_STAR = 3 -- теперь: мин. активных преследований для 3-й звезды у ЭТОГО игрока
+local MIN_PLAYERS_FOR_THIRD_STAR = 3
 
 -- === СЕТЕВЫЕ СОБЫТИЯ ===
 local EVT_SYNC_STATE    = "NPC:SyncState"
@@ -65,7 +65,7 @@ local delayedSoundPlayed = false
 local detectionTimer = 0
 local state = "Idle"
 local attackCount = 0
-local isArrestedLocal = false -- этот экземпляр арестовал кого-то
+local isArrestedLocal = false
 local arrestPos = nil
 local attackTimer = 0
 local spawnPos = nil
@@ -77,8 +77,7 @@ local WAIT_MAX = 3
 local WALK_SPEED = 1.6
 local adminProvoked = false
 
--- === ПЕР-ПЛЕЕР РОЗЫСК (локальный кэш) ===
--- Структура: wantedData[playerName] = {star1, star2, star3, pursuitTimer, arrestedBy}
+-- === ПЕР-ПЛЕЕР РОЗЫСК ===
 local wantedData = {}
 local fileReadTimer = 0
 local FILE_READ_INTERVAL = 0.5
@@ -96,6 +95,7 @@ local dogLastAttackTime = 0
 local policeCar = nil
 local stayPoint = nil
 local playerSitPoint = nil
+local carSpawned = false
 local arrestTimer = 0
 local ARREST_DELAY = 1.5
 local isEscorting = false
@@ -106,7 +106,7 @@ local reachedStayTimer = 0
 local isSittingTimerActive = false
 local isPlayerSeated = false
 local isPlayerLocked = false
-local arrestedPlayerName = nil -- имя игрока, которого арестовал этот NPC
+local arrestedPlayerName = nil
 
 -- === СИРЕНА ===
 local sirenaTransform = nil
@@ -151,23 +151,26 @@ local function SerializeTable(val, s, depth)
     end
 end
 
--- === JSON: Парсинг (упрощённый, для плоских структур) ===
+-- === JSON: Парсинг (улучшенный) ===
 local function ParseSimpleJson(jsonStr)
     local result = {}
     if not jsonStr or jsonStr == "" then return result end
     local clean = jsonStr:gsub("^%s*{", ""):gsub("}%s*$", ""):gsub("\n", " ")
     
-    -- Парсим "key": value пары
     for key, val in clean:gmatch('"([^"]+)"%s*:%s*([^,}]+)') do
         val = val:gsub("^%s*", ""):gsub("%s*$", "")
         if val == "true" then
             result[key] = true
         elseif val == "false" then
             result[key] = false
-        elseif tonumber(val) then
-            result[key] = tonumber(val)
         else
-            result[key] = val:gsub('"', "")
+            -- Гарантированная конвертация в число, если возможно
+            local num = tonumber(val)
+            if num then
+                result[key] = num
+            else
+                result[key] = val:gsub('"', "")
+            end
         end
     end
     return result
@@ -192,7 +195,6 @@ local function ReadWantedCache()
     if type(parsed) ~= "table" then return end
     
     for key, val in pairs(parsed) do
-        -- Ключ вида "PlayerName_field"
         local pname, field = key:match("^([^_]+)_(.+)$")
         if pname and field then
             wantedData[pname] = wantedData[pname] or {}
@@ -230,12 +232,10 @@ local function GetNPCId()
 end
 
 -- === СЕТЕВЫЕ ФУНКЦИИ: ОТПРАВКА ===
-
 local function GetLocalPlayerName()
     return Player.Name or "Unknown"
 end
 
--- Синхронизация состояния (отправляет любой клиент при изменении)
 local function BroadcastState()
     local payload = {
         npcId = GetNPCId(),
@@ -251,17 +251,15 @@ local function BroadcastState()
     self:SendEvent(EVT_SYNC_STATE, false, SerializeTable(payload))
 end
 
--- Синхронизация позиции (отправляет любой клиент при значительном изменении)
 local function BroadcastPosition(force)
     local pos = transform.position
     local rot = transform.eulerAngles
     
-    -- Проверка на значительное изменение позиции
     if not force and lastSentPos then
         local dx = pos.x - lastSentPos.x
         local dy = pos.y - lastSentPos.y
         local dz = pos.z - lastSentPos.z
-        if dx*dx + dy*dy + dz*dz < 0.01 then return end -- минимальное движение
+        if dx*dx + dy*dy + dz*dz < 0.01 then return end
     end
     
     lastSentPos = {x=pos.x, y=pos.y, z=pos.z}
@@ -273,7 +271,6 @@ local function BroadcastPosition(force)
     self:SendEvent(EVT_SYNC_POS, false, SerializeTable(payload))
 end
 
--- Синхронизация розыска для КОНКРЕТНОГО игрока (отправляет любой клиент)
 local function BroadcastWantedForPlayer(playerName)
     local pdata = wantedData[playerName] or {}
     local payload = {
@@ -285,11 +282,9 @@ local function BroadcastWantedForPlayer(playerName)
         pursuitTimer = pdata.pursuitTimer or 0,
         arrestedBy = pdata.arrestedBy
     }
-    -- cached=true: новые игроки получат актуальный статус розыска
     self:SendEvent(EVT_SYNC_WANTED, true, SerializeTable(payload))
 end
 
--- Синхронизация ареста (отправляет любой клиент)
 local function BroadcastArrest(playerName, arrested, arrestNpcId)
     local payload = {
         npcId = GetNPCId(),
@@ -301,7 +296,6 @@ local function BroadcastArrest(playerName, arrested, arrestNpcId)
     self:SendEvent(EVT_SYNC_ARREST, true, SerializeTable(payload))
 end
 
--- Синхронизация собаки (отправляет любой клиент)
 local function BroadcastDog(active, pos)
     local payload = {
         npcId = GetNPCId(),
@@ -311,7 +305,6 @@ local function BroadcastDog(active, pos)
     self:SendEvent(EVT_SYNC_DOG, false, SerializeTable(payload))
 end
 
--- Синхронизация машины (отправляет любой клиент)
 local function BroadcastCar(active, pos, rot)
     if policeCar == nil then return end
     local payload = {
@@ -323,21 +316,34 @@ local function BroadcastCar(active, pos, rot)
     self:SendEvent(EVT_SYNC_CAR, false, SerializeTable(payload))
 end
 
--- Синхронизация анимации (отправляет любой клиент)
 local function BroadcastAnim(animName)
     local payload = { npcId = GetNPCId(), anim = animName }
     self:SendEvent(EVT_SYNC_ANIM, false, SerializeTable(payload))
 end
 
--- === СЕТЕВЫЕ ФУНКЦИИ: ПРИЁМ ===
+-- === СЕТЕВЫЕ ФУНКЦИИ: ПРИЁМ (ИСПРАВЛЕНО) ===
 function ReceiveEvent(eventName, arg)
-    if not arg or not arg[0] then return end
-    local dataStr = tostring(arg[0])
+    if not arg then return end
+    
+    -- 🔧 БЕЗОПАСНОЕ ПОЛУЧЕНИЕ ПЕРВОГО ЭЛЕМЕНТА
+    local firstArg = nil
+    local success, result = pcall(function() return arg[0] end)
+    if success and result ~= nil then
+        firstArg = result
+    else
+        -- Пробуем 1-индексацию как запасной вариант
+        success, result = pcall(function() return arg[1] end)
+        if success and result ~= nil then
+            firstArg = result
+        else
+            return
+        end
+    end
+    
+    local dataStr = tostring(firstArg)
     local data = ParseSimpleJson(dataStr)
     if not data or not data.npcId then return end
     
-    -- Игнорируем события от самого себя (дубли) - только если мы владелец
-    -- Теперь любой клиент может отправлять данные, поэтому фильтруем только свои сообщения
     if data.npcId == GetNPCId() and self:IsOwner() then return end
     
     local myName = GetLocalPlayerName()
@@ -353,43 +359,45 @@ function ReceiveEvent(eventName, arg)
         if data.isPlayerSeated ~= nil then isPlayerSeated = data.isPlayerSeated end
         
     elseif eventName == EVT_SYNC_POS then
-        -- Синхронизируем позицию всегда (кроме случая когда мы отправили это сами)
+        -- 🔧 ИСПРАВЛЕНО: tonumber() для всех координат
         if data.x and data.y and data.z then
-            transform.position = unity.Vector3(data.x, data.y, data.z)
+            local x = tonumber(data.x)
+            local y = tonumber(data.y)
+            local z = tonumber(data.z)
+            if x and y and z then
+                transform.position = unity.Vector3(x, y, z)
+            end
         end
         if data.rotY then
-            local eul = transform.eulerAngles
-            transform.eulerAngles = unity.Vector3(eul.x, data.rotY, eul.z)
+            local rotY = tonumber(data.rotY)
+            if rotY then
+                local eul = transform.eulerAngles
+                transform.eulerAngles = unity.Vector3(eul.x, rotY, eul.z)
+            end
         end
         
     elseif eventName == EVT_SYNC_WANTED then
-        -- Обновляем розыск ТОЛЬКО для целевого игрока
         if data.targetPlayer and data.targetPlayer == myName then
             wantedData[myName] = wantedData[myName] or {}
             local wd = wantedData[myName]
             if data.star1 ~= nil then wd.star1 = data.star1 end
             if data.star2 ~= nil then wd.star2 = data.star2 end
             if data.star3 ~= nil then wd.star3 = data.star3 end
-            if data.pursuitTimer then wd.pursuitTimer = data.pursuitTimer end
+            if data.pursuitTimer then wd.pursuitTimer = tonumber(data.pursuitTimer) or 0 end
             if data.arrestedBy then wd.arrestedBy = data.arrestedBy end
             WriteWantedCache()
-            
         elseif data.targetPlayer then
-            -- Если данные для другого игрока — обновляем кэш (для отображения в дебаге)
             wantedData[data.targetPlayer] = wantedData[data.targetPlayer] or {}
             local wd = wantedData[data.targetPlayer]
             if data.star1 ~= nil then wd.star1 = data.star1 end
             if data.star2 ~= nil then wd.star2 = data.star2 end
-            if data.pursuitTimer then wd.pursuitTimer = data.pursuitTimer end
+            if data.pursuitTimer then wd.pursuitTimer = tonumber(data.pursuitTimer) or 0 end
         end
         
     elseif eventName == EVT_SYNC_ARREST then
         if data.targetPlayer == myName and data.isArrested ~= nil then
-            -- Этот игрок арестован другим NPC
             if data.isArrested then
-                -- Начинаем "режим арестованного" локально
                 if not isArrestedLocal and state ~= "Escorting" then
-                    -- Игрок арестован ДРУГИМ копом — сбрасываем аггрессию
                     if alertPlayed then
                         alertPlayed = false
                         delayedSoundPlayed = false
@@ -401,7 +409,6 @@ function ReceiveEvent(eventName, arg)
                     end
                 end
             else
-                -- Освобождение
                 if wantedData[myName] then
                     wantedData[myName].arrestedBy = nil
                 end
@@ -413,7 +420,13 @@ function ReceiveEvent(eventName, arg)
             dogIsActive = data.dogActive
             dogObject:SetActive(dogIsActive)
             if data.dogPos and dogIsActive then
-                dogObject.transform.position = unity.Vector3(data.dogPos.x, data.dogPos.y, data.dogPos.z)
+                -- 🔧 ИСПРАВЛЕНО: tonumber() для координат собаки
+                local x = tonumber(data.dogPos.x)
+                local y = tonumber(data.dogPos.y)
+                local z = tonumber(data.dogPos.z)
+                if x and y and z then
+                    dogObject.transform.position = unity.Vector3(x, y, z)
+                end
             end
         end
         
@@ -421,10 +434,22 @@ function ReceiveEvent(eventName, arg)
         if policeCar ~= nil and data.carActive ~= nil then
             policeCar:SetActive(data.carActive)
             if data.carPos then
-                policeCar.transform.position = unity.Vector3(data.carPos.x, data.carPos.y, data.carPos.z)
+                -- 🔧 ИСПРАВЛЕНО: tonumber() для координат машины
+                local x = tonumber(data.carPos.x)
+                local y = tonumber(data.carPos.y)
+                local z = tonumber(data.carPos.z)
+                if x and y and z then
+                    policeCar.transform.position = unity.Vector3(x, y, z)
+                end
             end
             if data.carRot then
-                policeCar.transform.eulerAngles = unity.Vector3(data.carRot.x, data.carRot.y, data.carRot.z)
+                -- 🔧 ИСПРАВЛЕНО: tonumber() для вращения машины
+                local x = tonumber(data.carRot.x)
+                local y = tonumber(data.carRot.y)
+                local z = tonumber(data.carRot.z)
+                if x and y and z then
+                    policeCar.transform.eulerAngles = unity.Vector3(x, y, z)
+                end
             end
         end
         
@@ -435,10 +460,54 @@ function ReceiveEvent(eventName, arg)
     end
 end
 
--- === ЛОГИКА РОЗЫСКА (пер-плеер) ===
-
+-- === ЛОГИКА РОЗЫСКА ===
 local function GetPlayerWanted(playerName)
     return wantedData[playerName] or {star1=false, star2=false, star3=false, pursuitTimer=0}
+end
+
+local function ValidateWantedLevel(playerName)
+    if not playerName or playerName == "Unknown" then return end
+    
+    local wd = wantedData[playerName]
+    if not wd then return end
+    
+    local needsUpdate = false
+    local playerPos = Player.Position
+    local npcPos = transform.position
+    
+    if playerPos and npcPos then
+        local dist = unity.Vector3.Distance(playerPos, npcPos)
+        if dist > CHASE_RADIUS * 2 then
+            if wd.star1 or wd.star2 or wd.star3 or (wd.pursuitTimer and wd.pursuitTimer > 0) then
+                wd.star1 = false
+                wd.star2 = false
+                wd.star3 = false
+                wd.pursuitTimer = 0
+                needsUpdate = true
+            end
+        end
+    end
+    
+    if wd.pursuitTimer and (wd.pursuitTimer < 0 or wd.pursuitTimer > 3600) then
+        wd.pursuitTimer = 0
+        needsUpdate = true
+    end
+    
+    if wd.star1 == false and (wd.star2 or wd.star3) then
+        wd.star2 = false
+        wd.star3 = false
+        needsUpdate = true
+    end
+    
+    if wd.star2 == false and wd.star3 then
+        wd.star3 = false
+        needsUpdate = true
+    end
+    
+    if needsUpdate then
+        WriteWantedCache()
+        BroadcastWantedForPlayer(playerName)
+    end
 end
 
 local function UpdatePlayerWanted(playerName, field, value)
@@ -449,7 +518,6 @@ local function UpdatePlayerWanted(playerName, field, value)
 end
 
 local function RecalculateThirdStar(playerName)
-    -- 3-я звезда: если у игрока >= MIN_PLAYERS активных преследований
     local activePursuits = 0
     for _, wd in pairs(wantedData) do
         if wd.star1 and wd.pursuitTimer and wd.pursuitTimer > 0 then
@@ -465,7 +533,6 @@ local function RecalculateThirdStar(playerName)
 end
 
 -- === ДВИЖЕНИЕ ===
-
 local function GetRandomPoint()
     local r = RandRange(0, WANDER_RADIUS)
     local a = RandRange(0, 6.283185)
@@ -492,7 +559,6 @@ local function MoveTo(target, speed, dt)
 end
 
 -- === UNITY CALLBACKS ===
-
 function Start()
     animation = gameObject:GetComponent(typeof(unity.Animation))
     alertAudio = gameObject:GetComponent(typeof(unity.AudioSource))
@@ -527,12 +593,7 @@ function Start()
     -- === Инициализация машины ===
     local polCarChild = transform:Find("PolicayCar")
     if polCarChild ~= nil then
-        polCarChild:SetParent(nil)
         policeCar = polCarChild.gameObject
-        local sideOffset = transform.right * 5
-        local newPos = unity.Vector3(spawnPos.x + sideOffset.x, spawnPos.y, spawnPos.z + sideOffset.z)
-        policeCar.transform.position = newPos
-        policeCar.transform.rotation = transform.rotation
         policeCar:SetActive(false)
 
         local stayObj = policeCar.transform:Find("StayPoint")
@@ -558,8 +619,11 @@ function Start()
         starTextureRequest:SendWebRequest()
     end
 
-    -- === Инициализация кэша и синхронизация ===
+    -- === Инициализация кэша ===
     ReadWantedCache()
+    local myName = GetLocalPlayerName()
+    ValidateWantedLevel(myName)
+    
     BroadcastState()
     BroadcastPosition(true)
     BroadcastCar(policeCar and policeCar.activeSelf, policeCar and policeCar.transform.position, policeCar and policeCar.transform.eulerAngles)
@@ -575,7 +639,6 @@ function OnDestroy()
     if policeCar ~= nil then
         unity.Object.Destroy(policeCar)
     end
-    -- Очищаем кэш: если этот NPC арестовал игрока — освобождаем
     if arrestedPlayerName and wantedData[arrestedPlayerName] then
         wantedData[arrestedPlayerName].arrestedBy = nil
         WriteWantedCache()
@@ -613,7 +676,7 @@ function Update()
         starTextureRequest = nil
     end
 
-    -- === Таймеры синхронизации (отправляет любой клиент) ===
+    -- === Таймеры синхронизации ===
     posSyncTimer = posSyncTimer + dt
     if posSyncTimer >= POS_SYNC_INTERVAL then
         posSyncTimer = 0
@@ -640,10 +703,13 @@ function Update()
     if fileReadTimer >= FILE_READ_INTERVAL then
         fileReadTimer = 0
         ReadWantedCache()
+        ValidateWantedLevel(myName)
         WriteWantedCache()
     end
+    
+    ValidateWantedLevel(myName)
 
-    -- === Админ-управление (локально + синхронизация) ===
+    -- === Админ-управление ===
     if Player.IsAdmin then
         if unity.Input.GetKeyDown(unity.KeyCode.Alpha0) then
             wantedData[myName] = wantedData[myName] or {}
@@ -665,12 +731,11 @@ function Update()
         end
     end
 
-    -- === Проверка: арестован ли этот игрок ДРУГИМ NPC? ===
+    -- === Проверка: арестован ли игрок ДРУГИМ NPC ===
     local wd = wantedData[myName] or {}
     local arrestedByOther = wd.arrestedBy and wd.arrestedBy ~= GetNPCId() and not isArrestedLocal
 
     if arrestedByOther then
-        -- Сброс аггрессии, возврат к патрулю
         if state ~= "Idle" and state ~= "Wander" then
             state = "Idle"
             PlayAnim(ANIM_IDLE)
@@ -687,15 +752,13 @@ function Update()
         end
     end
 
-    -- === 🔧 ЛОГИКА СОБАКИ ===
+    -- === ЛОГИКА СОБАКИ ===
     if dogIsActive and dogObject ~= nil then
         local dogPos = dogObject.transform.position
         if arrestedByOther or isArrestedLocal then
-            -- Игрок арестован (другим или этим NPC) — собака стоп
             if dogAnimation then dogAnimation:Play(DOG_ANIM_IDLE) end
             if dogAudioSource and dogAudioSource.isPlaying then dogAudioSource:Stop() end
         else
-            -- Движение к игроку
             local dir = playerPos - dogPos
             dir.y = 0
             if dir.sqrMagnitude > 0.0001 then
@@ -708,16 +771,13 @@ function Update()
                     dt * 8
                 )
             end
-            -- Атака
             if unity.Vector3.Distance(dogPos, playerPos) <= DOG_ATTACK_DIST then
                 if unity.Time.time - dogLastAttackTime >= DOG_ATTACK_COOLDOWN then
                     dogLastAttackTime = unity.Time.time
                     Player:TakeDamage(DOG_ATTACK_DAMAGE)
                 end
             end
-            -- Анимация
             if dogAnimation then dogAnimation:Play(DOG_ANIM_RUN) end
-            -- Звук
             dogLastSoundTime = dogLastSoundTime + dt
             if dogLastSoundTime >= DOG_SOUND_INTERVAL then
                 dogLastSoundTime = 0
@@ -726,7 +786,7 @@ function Update()
         end
     end
 
-    -- === 🔧 ЛОГИКА АРЕСТА (если МЫ арестовали) ===
+    -- === ЛОГИКА АРЕСТА ===
     if isArrestedLocal then
         if arrestTimer > 0 then
             arrestTimer = arrestTimer - dt
@@ -735,6 +795,13 @@ function Update()
             return
         end
         if not isEscorting then
+            if policeCar ~= nil and not carSpawned then
+                policeCar.transform:SetParent(nil)
+                policeCar.transform.position = transform.position - transform.right * -8
+                policeCar.transform.rotation = transform.rotation
+                carSpawned = true
+            end
+
             if policeCar ~= nil then
                 policeCar:SetActive(true)
                 BroadcastCar(true, policeCar.transform.position, policeCar.transform.eulerAngles)
@@ -798,13 +865,12 @@ function Update()
         return
     end
 
-    -- === 🔧 ЛОГИКА АГГРО (только если игрок НЕ арестован другим) ===
+    -- === ЛОГИКА АГГРО ===
     if not arrestedByOther then
         local shouldAggro = distToPlayer <= CHASE_RADIUS and ((not Player.IsAdmin) or adminProvoked)
         local wd = wantedData[myName] or {}
 
         if shouldAggro then
-            -- Звуки
             if not alertPlayed then
                 if alertAudio then alertAudio:Play() end
                 alertPlayed = true
@@ -824,17 +890,14 @@ function Update()
                 end
             end
 
-            -- Обновление розыска ДЛЯ ЭТОГО ИГРОКА
             if not wd.star1 then
                 UpdatePlayerWanted(myName, "star1", true)
             end
             wd.pursuitTimer = (wd.pursuitTimer or 0) + dt
             UpdatePlayerWanted(myName, "pursuitTimer", wd.pursuitTimer)
 
-            -- Вторая звезда
             if wd.pursuitTimer >= PURSUIT_TIME_FOR_SECOND_STAR and not wd.star2 then
                 UpdatePlayerWanted(myName, "star2", true)
-                -- Активация собаки
                 if dogObject ~= nil and not dogIsActive then
                     dogObject.transform:SetParent(nil)
                     dogObject.transform.position = transform.position - transform.right * 2
@@ -848,16 +911,13 @@ function Update()
                 end
             end
 
-            -- Третья звезда (пересчёт)
             RecalculateThirdStar(myName)
 
-            -- Логика атаки
             if state == "Attacking" then
                 attackTimer = attackTimer - dt
                 if attackTimer <= 0 then
                     attackCount = attackCount + 1
                     if attackCount >= MAX_ATTACKS then
-                        -- АРЕСТ
                         isArrestedLocal = true
                         arrestTimer = ARREST_DELAY
                         arrestPos = playerPos
@@ -896,7 +956,6 @@ function Update()
             end
             return
         else
-            -- Игрок вне радиуса — сброс аггрессии для ЭТОГО игрока
             if alertPlayed then
                 alertPlayed = false
                 delayedSoundPlayed = false
@@ -912,7 +971,7 @@ function Update()
         end
     end
 
-    -- === 🔧 ПАТРУЛЬ (IDLE / WANDER) ===
+    -- === ПАТРУЛЬ ===
     if state == "Chase" or state == "Attacking" then
         state = "Idle"
         PlayAnim(ANIM_IDLE)
@@ -955,7 +1014,6 @@ function OnGUI()
         unity.GUI.DrawTexture(rect, arrestTexture)
     end
 
-    -- Отрисовка звёзд (пер-плеер)
     if starTexture ~= nil then
         local myName = GetLocalPlayerName()
         local wd = wantedData[myName] or {star1=false, star2=false, star3=false}
