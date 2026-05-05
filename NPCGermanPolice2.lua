@@ -25,7 +25,7 @@ local ARREST_IMAGE_URL = "https://raw.githubusercontent.com/0x2171/DiggerMod/ref
 local STAR_ICON_URL = "https://raw.githubusercontent.com/0x2171/DiggerMod/refs/heads/main/CopIcon.png"
 
 -- === ПУТЬ К ФАЙЛУ (ЛОКАЛЬНЫЙ КЭШ) ===
-local PROPERTIES_FILE_PATH = "C:\\DANZIG\\properties.json"
+local PROPERTIES_FILE_PATH = "C:\\\\DANZIG\\\\properties.json"
 local PURSUIT_TIME_FOR_SECOND_STAR = 20.0
 local MIN_PLAYERS_FOR_THIRD_STAR = 3 -- теперь: мин. активных преследований для 3-й звезды у ЭТОГО игрока
 
@@ -690,8 +690,8 @@ function Update()
     -- === 🔧 ЛОГИКА СОБАКИ ===
     if dogIsActive and dogObject ~= nil then
         local dogPos = dogObject.transform.position
-        if arrestedByOther or (wd.arrestedBy and wd.arrestedBy ~= GetNPCId()) then
-            -- Игрок арестован другим — собака стоп
+        if arrestedByOther or isArrestedLocal then
+            -- Игрок арестован (другим или этим NPC) — собака стоп
             if dogAnimation then dogAnimation:Play(DOG_ANIM_IDLE) end
             if dogAudioSource and dogAudioSource.isPlaying then dogAudioSource:Stop() end
         else
