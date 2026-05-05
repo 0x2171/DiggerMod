@@ -39,13 +39,14 @@ local EVT_SYNC_CAR      = "NPC:SyncCar"
 local EVT_SYNC_ANIM     = "NPC:SyncAnim"
 
 -- === ТАЙМЕРЫ СИНХРОНИЗАЦИИ ===
-local POS_SYNC_INTERVAL   = 0.4
-local STATE_SYNC_INTERVAL = 0.8
-local WANTED_SYNC_INTERVAL = 1.0
+local POS_SYNC_INTERVAL   = 0.15
+local STATE_SYNC_INTERVAL = 0.3
+local WANTED_SYNC_INTERVAL = 0.5
 local posSyncTimer = 0
 local stateSyncTimer = 0
 local wantedSyncTimer = 0
 local lastSentState = nil
+local lastSentPos = nil
 
 -- === ПЕРЕМЕННЫЕ ДЛЯ ТЕКСТУР ===
 local arrestTexture = nil
@@ -234,9 +235,8 @@ local function GetLocalPlayerName()
     return Player.Name or "Unknown"
 end
 
--- Синхронизация состояния (только владелец отправляет)
+-- Синхронизация состояния (отправляет любой клиент при изменении)
 local function BroadcastState()
-    if not self:IsOwner() then return end
     local payload = {
         npcId = GetNPCId(),
         state = state,
@@ -251,11 +251,20 @@ local function BroadcastState()
     self:SendEvent(EVT_SYNC_STATE, false, SerializeTable(payload))
 end
 
--- Синхронизация позиции (только владелец)
-local function BroadcastPosition()
-    if not self:IsOwner() then return end
+-- Синхронизация позиции (отправляет любой клиент при значительном изменении)
+local function BroadcastPosition(force)
     local pos = transform.position
     local rot = transform.eulerAngles
+    
+    -- Проверка на значительное изменение позиции
+    if not force and lastSentPos then
+        local dx = pos.x - lastSentPos.x
+        local dy = pos.y - lastSentPos.y
+        local dz = pos.z - lastSentPos.z
+        if dx*dx + dy*dy + dz*dz < 0.01 then return end -- минимальное движение
+    end
+    
+    lastSentPos = {x=pos.x, y=pos.y, z=pos.z}
     local payload = {
         npcId = GetNPCId(),
         x = pos.x, y = pos.y, z = pos.z,
@@ -264,9 +273,8 @@ local function BroadcastPosition()
     self:SendEvent(EVT_SYNC_POS, false, SerializeTable(payload))
 end
 
--- Синхронизация розыска для КОНКРЕТНОГО игрока
+-- Синхронизация розыска для КОНКРЕТНОГО игрока (отправляет любой клиент)
 local function BroadcastWantedForPlayer(playerName)
-    if not self:IsOwner() then return end
     local pdata = wantedData[playerName] or {}
     local payload = {
         npcId = GetNPCId(),
@@ -281,7 +289,7 @@ local function BroadcastWantedForPlayer(playerName)
     self:SendEvent(EVT_SYNC_WANTED, true, SerializeTable(payload))
 end
 
--- Синхронизация ареста
+-- Синхронизация ареста (отправляет любой клиент)
 local function BroadcastArrest(playerName, arrested, arrestNpcId)
     local payload = {
         npcId = GetNPCId(),
@@ -293,9 +301,8 @@ local function BroadcastArrest(playerName, arrested, arrestNpcId)
     self:SendEvent(EVT_SYNC_ARREST, true, SerializeTable(payload))
 end
 
--- Синхронизация собаки
+-- Синхронизация собаки (отправляет любой клиент)
 local function BroadcastDog(active, pos)
-    if not self:IsOwner() then return end
     local payload = {
         npcId = GetNPCId(),
         dogActive = active,
@@ -304,9 +311,9 @@ local function BroadcastDog(active, pos)
     self:SendEvent(EVT_SYNC_DOG, false, SerializeTable(payload))
 end
 
--- Синхронизация машины
+-- Синхронизация машины (отправляет любой клиент)
 local function BroadcastCar(active, pos, rot)
-    if not self:IsOwner() or policeCar == nil then return end
+    if policeCar == nil then return end
     local payload = {
         npcId = GetNPCId(),
         carActive = active,
@@ -316,9 +323,8 @@ local function BroadcastCar(active, pos, rot)
     self:SendEvent(EVT_SYNC_CAR, false, SerializeTable(payload))
 end
 
--- Синхронизация анимации
+-- Синхронизация анимации (отправляет любой клиент)
 local function BroadcastAnim(animName)
-    if not self:IsOwner() then return end
     local payload = { npcId = GetNPCId(), anim = animName }
     self:SendEvent(EVT_SYNC_ANIM, false, SerializeTable(payload))
 end
@@ -330,7 +336,8 @@ function ReceiveEvent(eventName, arg)
     local data = ParseSimpleJson(dataStr)
     if not data or not data.npcId then return end
     
-    -- Игнорируем события от самого себя (дубли)
+    -- Игнорируем события от самого себя (дубли) - только если мы владелец
+    -- Теперь любой клиент может отправлять данные, поэтому фильтруем только свои сообщения
     if data.npcId == GetNPCId() and self:IsOwner() then return end
     
     local myName = GetLocalPlayerName()
@@ -346,11 +353,11 @@ function ReceiveEvent(eventName, arg)
         if data.isPlayerSeated ~= nil then isPlayerSeated = data.isPlayerSeated end
         
     elseif eventName == EVT_SYNC_POS then
-        -- Синхронизируем позицию только если НЕ владелец
-        if not self:IsOwner() and data.x and data.y and data.z then
+        -- Синхронизируем позицию всегда (кроме случая когда мы отправили это сами)
+        if data.x and data.y and data.z then
             transform.position = unity.Vector3(data.x, data.y, data.z)
         end
-        if not self:IsOwner() and data.rotY then
+        if data.rotY then
             local eul = transform.eulerAngles
             transform.eulerAngles = unity.Vector3(eul.x, data.rotY, eul.z)
         end
@@ -405,7 +412,7 @@ function ReceiveEvent(eventName, arg)
         if data.dogActive ~= nil and dogObject ~= nil then
             dogIsActive = data.dogActive
             dogObject:SetActive(dogIsActive)
-            if data.dogPos and dogIsActive and not self:IsOwner() then
+            if data.dogPos and dogIsActive then
                 dogObject.transform.position = unity.Vector3(data.dogPos.x, data.dogPos.y, data.dogPos.z)
             end
         end
@@ -413,16 +420,16 @@ function ReceiveEvent(eventName, arg)
     elseif eventName == EVT_SYNC_CAR then
         if policeCar ~= nil and data.carActive ~= nil then
             policeCar:SetActive(data.carActive)
-            if data.carPos and not self:IsOwner() then
+            if data.carPos then
                 policeCar.transform.position = unity.Vector3(data.carPos.x, data.carPos.y, data.carPos.z)
             end
-            if data.carRot and not self:IsOwner() then
+            if data.carRot then
                 policeCar.transform.eulerAngles = unity.Vector3(data.carRot.x, data.carRot.y, data.carRot.z)
             end
         end
         
     elseif eventName == EVT_SYNC_ANIM then
-        if data.anim and animation and not self:IsOwner() then
+        if data.anim and animation then
             animation:Play(data.anim)
         end
     end
@@ -553,12 +560,10 @@ function Start()
 
     -- === Инициализация кэша и синхронизация ===
     ReadWantedCache()
-    if self:IsOwner() then
-        BroadcastState()
-        BroadcastPosition()
-        BroadcastCar(policeCar and policeCar.activeSelf, policeCar and policeCar.transform.position, policeCar and policeCar.transform.eulerAngles)
-        BroadcastDog(dogIsActive, dogObject and dogObject.transform.position)
-    end
+    BroadcastState()
+    BroadcastPosition(true)
+    BroadcastCar(policeCar and policeCar.activeSelf, policeCar and policeCar.transform.position, policeCar and policeCar.transform.eulerAngles)
+    BroadcastDog(dogIsActive, dogObject and dogObject.transform.position)
 end
 
 function OnDestroy()
@@ -581,7 +586,7 @@ end
 function OnInteract()
     if Player.IsAdmin then
         adminProvoked = true
-        if self:IsOwner() then BroadcastState() end
+        BroadcastState()
     end
 end
 
@@ -608,28 +613,26 @@ function Update()
         starTextureRequest = nil
     end
 
-    -- === Таймеры синхронизации (только владелец отправляет) ===
-    if self:IsOwner() then
-        posSyncTimer = posSyncTimer + dt
-        if posSyncTimer >= POS_SYNC_INTERVAL then
-            posSyncTimer = 0
-            BroadcastPosition()
+    -- === Таймеры синхронизации (отправляет любой клиент) ===
+    posSyncTimer = posSyncTimer + dt
+    if posSyncTimer >= POS_SYNC_INTERVAL then
+        posSyncTimer = 0
+        BroadcastPosition()
+    end
+    stateSyncTimer = stateSyncTimer + dt
+    if stateSyncTimer >= STATE_SYNC_INTERVAL then
+        stateSyncTimer = 0
+        local curStateKey = state .. "|".. tostring(isArrestedLocal) .. "|".. tostring(attackCount)
+        if curStateKey ~= lastSentState then
+            lastSentState = curStateKey
+            BroadcastState()
         end
-        stateSyncTimer = stateSyncTimer + dt
-        if stateSyncTimer >= STATE_SYNC_INTERVAL then
-            stateSyncTimer = 0
-            local curStateKey = state .. "|".. tostring(isArrestedLocal) .. "|".. tostring(attackCount)
-            if curStateKey ~= lastSentState then
-                lastSentState = curStateKey
-                BroadcastState()
-            end
-        end
-        wantedSyncTimer = wantedSyncTimer + dt
-        if wantedSyncTimer >= WANTED_SYNC_INTERVAL and wantedData[myName] then
-            wantedSyncTimer = 0
-            BroadcastWantedForPlayer(myName)
-            RecalculateThirdStar(myName)
-        end
+    end
+    wantedSyncTimer = wantedSyncTimer + dt
+    if wantedSyncTimer >= WANTED_SYNC_INTERVAL and wantedData[myName] then
+        wantedSyncTimer = 0
+        BroadcastWantedForPlayer(myName)
+        RecalculateThirdStar(myName)
     end
 
     -- === Локальный кэш файла ===
@@ -646,19 +649,19 @@ function Update()
             wantedData[myName] = wantedData[myName] or {}
             wantedData[myName].star1 = not (wantedData[myName].star1 or false)
             WriteWantedCache()
-            if self:IsOwner() then BroadcastWantedForPlayer(myName) end
+            BroadcastWantedForPlayer(myName)
         end
         if unity.Input.GetKeyDown(unity.KeyCode.Minus) then
             wantedData[myName] = wantedData[myName] or {}
             wantedData[myName].star2 = not (wantedData[myName].star2 or false)
             WriteWantedCache()
-            if self:IsOwner() then BroadcastWantedForPlayer(myName) end
+            BroadcastWantedForPlayer(myName)
         end
         if unity.Input.GetKeyDown(unity.KeyCode.Equals) then
             wantedData[myName] = wantedData[myName] or {}
             wantedData[myName].star3 = not (wantedData[myName].star3 or false)
             WriteWantedCache()
-            if self:IsOwner() then BroadcastWantedForPlayer(myName) end
+            BroadcastWantedForPlayer(myName)
         end
     end
 
@@ -671,7 +674,7 @@ function Update()
         if state ~= "Idle" and state ~= "Wander" then
             state = "Idle"
             PlayAnim(ANIM_IDLE)
-            if self:IsOwner() then BroadcastAnim(ANIM_IDLE) end
+            BroadcastAnim(ANIM_IDLE)
             alertPlayed = false
             delayedSoundPlayed = false
             detectionTimer = 0
@@ -680,7 +683,7 @@ function Update()
             if wd then wd.pursuitTimer = 0 end
             targetPos = nil
             waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
-            if self:IsOwner() then BroadcastState() end
+            BroadcastState()
         end
     end
 
@@ -734,7 +737,7 @@ function Update()
         if not isEscorting then
             if policeCar ~= nil then
                 policeCar:SetActive(true)
-                if self:IsOwner() then BroadcastCar(true, policeCar.transform.position, policeCar.transform.eulerAngles) end
+                BroadcastCar(true, policeCar.transform.position, policeCar.transform.eulerAngles)
             end
             isEscorting = true
             state = "Escorting"
@@ -743,10 +746,8 @@ function Update()
             isPlayerLocked = false
             isSittingTimerActive = false
             PlayAnim(ANIM_RUN)
-            if self:IsOwner() then
-                BroadcastState()
-                BroadcastAnim(ANIM_RUN)
-            end
+            BroadcastState()
+            BroadcastAnim(ANIM_RUN)
         end
         if stayPoint ~= nil and not hasReachedStay then
             local toStay = stayPoint.position - transform.position
@@ -756,7 +757,7 @@ function Update()
             else
                 hasReachedStay = true
                 PlayAnim(ANIM_IDLE)
-                if self:IsOwner() then BroadcastAnim(ANIM_IDLE) end
+                BroadcastAnim(ANIM_IDLE)
             end
         end
         if hasReachedStay then
@@ -773,7 +774,7 @@ function Update()
                         Chat:AddMessage(Player.Name .. " помещён в полицейскую машину.", "[00FF00]")
                     end
                     PlayAnim(ANIM_IDLE)
-                    if self:IsOwner() then BroadcastAnim(ANIM_IDLE) end
+                    BroadcastAnim(ANIM_IDLE)
                 end
             end
         end
@@ -843,7 +844,7 @@ function Update()
                     dogLastSoundTime = 0
                     if dogAnimation then dogAnimation:Play(DOG_ANIM_RUN) end
                     if dogAudioSource then dogAudioSource:Play() end
-                    if self:IsOwner() then BroadcastDog(true, dogObject.transform.position) end
+                    BroadcastDog(true, dogObject.transform.position)
                 end
             end
 
@@ -864,15 +865,13 @@ function Update()
                         Chat:AddMessage(Player.Name .. " был арестован!", "[FF0000]")
                         UpdatePlayerWanted(myName, "arrestedBy", GetNPCId())
                         BroadcastArrest(myName, true, GetNPCId())
-                        if self:IsOwner() then BroadcastState() end
+                        BroadcastState()
                         return
                     end
                     state = "Chase"
                     PlayAnim(ANIM_RUN)
-                    if self:IsOwner() then
-                        BroadcastState()
-                        BroadcastAnim(ANIM_RUN)
-                    end
+                    BroadcastState()
+                    BroadcastAnim(ANIM_RUN)
                 end
                 return
             end
@@ -882,16 +881,16 @@ function Update()
                     state = "Attacking"
                     attackTimer = ATTACK_COOLDOWN
                     PlayAnim(ANIM_ATTACK)
-                    if self:IsOwner() then BroadcastAnim(ANIM_ATTACK) end
+                    BroadcastAnim(ANIM_ATTACK)
                     Player:TakeDamage(ATTACK_DAMAGE)
                     if attackAudio then attackAudio:Play() end
-                    if self:IsOwner() then BroadcastState() end
+                    BroadcastState()
                 end
             else
                 if state ~= "Chase" then
                     state = "Chase"
                     PlayAnim(ANIM_RUN)
-                    if self:IsOwner() then BroadcastAnim(ANIM_RUN) end
+                    BroadcastAnim(ANIM_RUN)
                 end
                 MoveTo(playerPos, CHASE_SPEED, dt)
             end
@@ -917,10 +916,8 @@ function Update()
     if state == "Chase" or state == "Attacking" then
         state = "Idle"
         PlayAnim(ANIM_IDLE)
-        if self:IsOwner() then
-            BroadcastState()
-            BroadcastAnim(ANIM_IDLE)
-        end
+        BroadcastState()
+        BroadcastAnim(ANIM_IDLE)
         waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
     end
 
@@ -930,7 +927,7 @@ function Update()
             state = "Wander"
             targetPos = GetRandomPoint()
             PlayAnim(ANIM_RUN)
-            if self:IsOwner() then BroadcastAnim(ANIM_RUN) end
+            BroadcastAnim(ANIM_RUN)
         end
     elseif state == "Wander" then
         if targetPos == nil then
@@ -942,7 +939,7 @@ function Update()
                 state = "Idle"
                 waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
                 PlayAnim(ANIM_IDLE)
-                if self:IsOwner() then BroadcastAnim(ANIM_IDLE) end
+                BroadcastAnim(ANIM_IDLE)
             else
                 MoveTo(targetPos, WALK_SPEED, dt)
             end
