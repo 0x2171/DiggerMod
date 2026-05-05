@@ -1,4 +1,5 @@
 local unity = CS.UnityEngine
+
 -- === НАСТРОЙКИ ===
 local CHASE_RADIUS    = 70.0
 local ATTACK_DIST     = 1.5
@@ -9,90 +10,113 @@ local MAX_ATTACKS     = 5
 local ANIM_RUN        = "run_3"
 local ANIM_ATTACK     = "dig"
 local ANIM_IDLE       = "idle"
+
 -- === НАСТРОЙКИ СОБАКИ ===
 local DOG_CHASE_SPEED = 5.5
 local DOG_ANIM_RUN    = "run_0"
 local DOG_ANIM_IDLE   = "idle_3"
 local DOG_SOUND_INTERVAL = 5.0
-local DOG_ATTACK_DIST = 2.0        -- Дистанция атаки
-local DOG_ATTACK_COOLDOWN = 0.5    -- Кулдаун между атаками
-local DOG_ATTACK_DAMAGE = 0
+local DOG_ATTACK_DIST = 2.0
+local DOG_ATTACK_COOLDOWN = 0.5
+local DOG_ATTACK_DAMAGE = 0 
+
 -- URL картинки, которая появится при аресте
 local ARREST_IMAGE_URL = "https://raw.githubusercontent.com/0x2171/DiggerMod/refs/heads/main/narucniki.png"
--- === СИСТЕМА РОЗЫСКА ===
 local STAR_ICON_URL = "https://raw.githubusercontent.com/0x2171/DiggerMod/refs/heads/main/CopIcon.png"
+
+-- === ПУТЬ К ФАЙЛУ (ЛОКАЛЬНЫЙ КЭШ) ===
 local PROPERTIES_FILE_PATH = "C:\\DANZIG\\properties.json"
-local CACHE_DIR = "C:\\DANZIG\\textures"
-local PURSUIT_TIME_FOR_SECOND_STAR = 20.0 -- 2 минуты
-local MIN_PLAYERS_FOR_THIRD_STAR = 3
--- Переменные для иконок звезд
+local PURSUIT_TIME_FOR_SECOND_STAR = 20.0
+local MIN_PLAYERS_FOR_THIRD_STAR = 3 -- теперь: мин. активных преследований для 3-й звезды у ЭТОГО игрока
+
+-- === СЕТЕВЫЕ СОБЫТИЯ ===
+local EVT_SYNC_STATE    = "NPC:SyncState"
+local EVT_SYNC_POS      = "NPC:SyncPos"
+local EVT_SYNC_WANTED   = "NPC:SyncWanted"
+local EVT_SYNC_ARREST   = "NPC:SyncArrest"
+local EVT_SYNC_DOG      = "NPC:SyncDog"
+local EVT_SYNC_CAR      = "NPC:SyncCar"
+local EVT_SYNC_ANIM     = "NPC:SyncAnim"
+
+-- === ТАЙМЕРЫ СИНХРОНИЗАЦИИ ===
+local POS_SYNC_INTERVAL   = 0.4
+local STATE_SYNC_INTERVAL = 0.8
+local WANTED_SYNC_INTERVAL = 1.0
+local posSyncTimer = 0
+local stateSyncTimer = 0
+local wantedSyncTimer = 0
+local lastSentState = nil
+
+-- === ПЕРЕМЕННЫЕ ДЛЯ ТЕКСТУР ===
+local arrestTexture = nil
 local starTexture = nil
+local textureRequest = nil
 local starTextureRequest = nil
-local star1Active = false
-local star2Active = false
-local star3Active = false
-local pursuitTimer = 0.0
--- === ПЕРЕМЕННЫЕ ДЛЯ СОБАКИ ===
+
+-- === СОСТОЯНИЕ NPC ===
+local animation = nil
+local alertAudio = nil
+local attackAudio = nil
+local delayedAudio = nil
+local delayedAudio2 = nil
+local alertPlayed = false
+local delayedSoundPlayed = false
+local detectionTimer = 0
+local state = "Idle"
+local attackCount = 0
+local isArrestedLocal = false -- этот экземпляр арестовал кого-то
+local arrestPos = nil
+local attackTimer = 0
+local spawnPos = nil
+local targetPos = nil
+local waitTimer = 0
+local WANDER_RADIUS = 10
+local WAIT_MIN = 1
+local WAIT_MAX = 3
+local WALK_SPEED = 1.6
+local adminProvoked = false
+
+-- === ПЕР-ПЛЕЕР РОЗЫСК (локальный кэш) ===
+-- Структура: wantedData[playerName] = {star1, star2, star3, pursuitTimer, arrestedBy}
+local wantedData = {}
+local fileReadTimer = 0
+local FILE_READ_INTERVAL = 0.5
+
+-- === СОБАКА ===
 local dogObject = nil
 local dogAnimation = nil
 local dogAudioSource = nil
-local dogChaseTimer = 0.0
-local dogLastSoundTime = 0.0
+local dogChaseTimer = 0
+local dogLastSoundTime = 0
 local dogIsActive = false
-local dogLastAttackTime = 0.0
--- Глобальные данные из файла
-local globalWantedData = {}
-local fileReadTimer = 0.0
-local FILE_READ_INTERVAL = 0.1 -- Читаем файл каждые 0.1 сек
--- === СОСТОЯНИЕ NPC ===
-local animation       = nil
-local alertAudio      = nil
-local attackAudio     = nil
-local delayedAudio    = nil
-local delayedAudio2   = nil
-local alertPlayed     = false
-local delayedSoundPlayed = false
-local detectionTimer  = 0.0
-local state           = "Idle"
-local attackCount     = 0
-local isArrested      = false -- Локальный флаг: этот NPC арестовал игрока
-local arrestPos       = nil
-local attackTimer     = 0.0
--- Параметры блуждания
-local spawnPos        = nil
-local targetPos       = nil
-local waitTimer       = 0.0
-local WANDER_RADIUS   = 10.0
-local WAIT_MIN        = 1.0
-local WAIT_MAX        = 3.0
-local WALK_SPEED      = 1.6
-local adminProvoked   = false
--- === ПЕРЕМЕННЫЕ ДЛЯ КАРТИНКИ ===
-local arrestTexture   = nil
-local textureRequest  = nil
-local cachedArrestTexturePath = nil
-local cachedStarTexturePath = nil
--- === ПЕРЕМЕННЫЕ ДЛЯ АРЕСТА И СОПРОВОЖДЕНИЯ ===
-local policeCar           = nil
-local stayPoint           = nil
-local playerSitPoint      = nil
-local arrestTimer         = 0.0
-local ARREST_DELAY        = 1.5
-local isEscorting         = false
-local FOLLOW_DISTANCE     = 1.5
-local FOLLOW_SMOOTH       = 10.0
-local hasReachedStay      = false
-local reachedStayTimer    = 0.0
+local dogLastAttackTime = 0
+
+-- === АРЕСТ И МАШИНА ===
+local policeCar = nil
+local stayPoint = nil
+local playerSitPoint = nil
+local arrestTimer = 0
+local ARREST_DELAY = 1.5
+local isEscorting = false
+local FOLLOW_DISTANCE = 1.5
+local FOLLOW_SMOOTH = 10
+local hasReachedStay = false
+local reachedStayTimer = 0
 local isSittingTimerActive = false
-local isPlayerSeated      = false
-local isPlayerLocked      = false
--- === ПЕРЕМЕННЫЕ ДЛЯ СИРЕНЫ ===
-local sirenaTransform     = nil
-local sirenaAudio         = nil
-local SIRENA_ROT_SPEED    = 180.0
+local isPlayerSeated = false
+local isPlayerLocked = false
+local arrestedPlayerName = nil -- имя игрока, которого арестовал этот NPC
+
+-- === СИРЕНА ===
+local sirenaTransform = nil
+local sirenaAudio = nil
+local SIRENA_ROT_SPEED = 180
+
+-- === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 local function RandRange(a, b) return unity.Random.Range(a, b) end
 local function PlayAnim(name) if animation then animation:Play(name) end end
--- === РАБОТА С JSON (РУЧНАЯ РЕАЛИЗАЦИЯ) ===
+
+-- === JSON: Сериализация ===
 local function SerializeTable(val, s, depth)
     s = s or "{}"
     depth = depth or 0
@@ -125,165 +149,329 @@ local function SerializeTable(val, s, depth)
         return "null"
     end
 end
+
+-- === JSON: Парсинг (упрощённый, для плоских структур) ===
 local function ParseSimpleJson(jsonStr)
     local result = {}
     if not jsonStr or jsonStr == "" then return result end
-    local content = jsonStr:gsub("^%s*{", ""):gsub("}%s*$", "")
-    local pattern = '"([^"]+)"%s*:%s*(%b{})'
-    for npcId, dataStr in content:gmatch(pattern) do
-        local npcData = {}
-        for key, val in dataStr:gmatch('"([^"]+)"%s*:%s*([^,%}]+)') do
-            val = val:gsub("^%s*", ""):gsub("%s*$", "")
-            if val == "true" then
-                npcData[key] = true
-            elseif val == "false" then
-                npcData[key] = false
-            elseif tonumber(val) then
-                npcData[key] = tonumber(val)
-            else
-                npcData[key] = val:gsub('"', "")
-            end
+    local clean = jsonStr:gsub("^%s*{", ""):gsub("}%s*$", ""):gsub("\n", " ")
+    
+    -- Парсим "key": value пары
+    for key, val in clean:gmatch('"([^"]+)"%s*:%s*([^,}]+)') do
+        val = val:gsub("^%s*", ""):gsub("%s*$", "")
+        if val == "true" then
+            result[key] = true
+        elseif val == "false" then
+            result[key] = false
+        elseif tonumber(val) then
+            result[key] = tonumber(val)
+        else
+            result[key] = val:gsub('"', "")
         end
-        result[npcId] = npcData
     end
     return result
 end
+
+-- === РАБОТА С ФАЙЛОМ ===
 local function EnsureDirectoryExists(path)
     local dir = CS.System.IO.Path.GetDirectoryName(path)
     if dir and not CS.System.IO.Directory.Exists(dir) then
         CS.System.IO.Directory.CreateDirectory(dir)
     end
 end
-local function GetCachedTexturePath(url)
-    local fileName = url:gsub("^.*/", ""):gsub("[^%w%.]", "_")
-    return CS.System.IO.Path.Combine(CACHE_DIR, fileName)
-end
-local function LoadTextureFromCache(cachedPath)
-    if cachedPath and CS.System.IO.File.Exists(cachedPath) then
-        local bytes = CS.System.IO.File.ReadAllBytes(cachedPath)
-        local texture = CS.UnityEngine.Texture2D(2, 2)
-        if texture:LoadImage(bytes) then
-            return texture
-        end
-    end
-    return nil
-end
-local function SaveTextureToCache(texture, cachedPath)
-    if not texture then
-        unity.Debug.LogError("[NPC] SaveTextureToCache: texture is nil")
-        return
-    end
+
+local function ReadWantedCache()
+    wantedData = {}
+    if not CS.System.IO.File.Exists(PROPERTIES_FILE_PATH) then return end
     
-    EnsureDirectoryExists(cachedPath)
+    local content = CS.System.IO.File.ReadAllText(PROPERTIES_FILE_PATH)
+    if not content or content == "" then return end
     
-    -- Проверяем, что текстура читаема
-    if not texture.isReadable then
-        unity.Debug.LogWarning("[NPC] Texture is not readable, cannot encode to PNG: " .. cachedPath)
-        return
-    end
+    local parsed = ParseSimpleJson(content)
+    if type(parsed) ~= "table" then return end
     
-    local success, result = pcall(function()
-        if texture.EncodeToPNG then
-            local bytes = texture:EncodeToPNG()
-            if bytes and typeof(bytes) == "Byte[]" and bytes.Length > 0 then
-                CS.System.IO.File.WriteAllBytes(cachedPath, bytes)
-                
-                -- Проверяем, что файл действительно создан
-                if CS.System.IO.File.Exists(cachedPath) then
-                    unity.Debug.Log("[NPC] ✓ Texture saved to cache: " .. cachedPath .. " (" .. bytes.Length .. " bytes)")
-                    return true
-                else
-                    unity.Debug.LogError("[NPC] ✗ File.Write succeeded but file not found: " .. cachedPath)
-                    return false
-                end
+    for key, val in pairs(parsed) do
+        -- Ключ вида "PlayerName_field"
+        local pname, field = key:match("^([^_]+)_(.+)$")
+        if pname and field then
+            wantedData[pname] = wantedData[pname] or {}
+            if field == "star1" or field == "star2" or field == "star3" then
+                wantedData[pname][field] = (val == true)
+            elseif field == "pursuitTimer" then
+                wantedData[pname][field] = type(val) == "number" and val or 0
             else
-                unity.Debug.LogWarning("[NPC] EncodeToPNG returned empty bytes")
+                wantedData[pname][field] = val
             end
-        else
-            unity.Debug.LogWarning("[NPC] EncodeToPNG method not available on this texture")
         end
-        return false
-    end)
-    
-    if not success then
-        unity.Debug.LogError("[NPC] SaveTextureToCache error: " .. tostring(result))
-    elseif not result then
-        unity.Debug.LogWarning("[NPC] Could not save texture to cache: " .. cachedPath)
     end
 end
-local function ReadWantedData()
-    if CS.System.IO.File.Exists(PROPERTIES_FILE_PATH) then
-        local content = CS.System.IO.File.ReadAllText(PROPERTIES_FILE_PATH)
-        if content and content ~= "" then
-            globalWantedData = ParseSimpleJson(content)
-        else
-            globalWantedData = {}
-        end
-    else
-        globalWantedData = {}
-    end
-end
-local function WriteWantedData()
+
+local function WriteWantedCache()
     EnsureDirectoryExists(PROPERTIES_FILE_PATH)
-    local jsonStr = SerializeTable(globalWantedData)
+    local flat = {}
+    
+    if type(wantedData) == "table" then
+        for pname, pdata in pairs(wantedData) do
+            if type(pdata) == "table" then
+                for field, val in pairs(pdata) do
+                    flat[pname .. "_" .. field] = val
+                end
+            end
+        end
+    end
+    
+    local jsonStr = SerializeTable(flat)
     CS.System.IO.File.WriteAllText(PROPERTIES_FILE_PATH, jsonStr)
 end
+
 local function GetNPCId()
     return "DNPC_German_Police_" .. tostring(transform:GetInstanceID())
 end
-local function UpdateNPCDataInFile()
-    ReadWantedData()
-    local npcId = GetNPCId()
-    globalWantedData[npcId] = {
-        star1 = star1Active,
-        star2 = star2Active,
-        star3 = star3Active,
-        isArrested = isArrested,
-        pursuitTimer = pursuitTimer,
-        posX = transform.position.x,
-        posY = transform.position.y,
-        posZ = transform.position.z
-    }
-    WriteWantedData()
+
+-- === СЕТЕВЫЕ ФУНКЦИИ: ОТПРАВКА ===
+
+local function GetLocalPlayerName()
+    return Player.Name or "Unknown"
 end
-local function IsPlayerAlreadyArrested()
-    ReadWantedData()
-    local myId = GetNPCId()
-    for npcId, data in pairs(globalWantedData) do
-        if npcId ~= myId then
-            if data and data.isArrested == true then
-                return true
+
+-- Синхронизация состояния (только владелец отправляет)
+local function BroadcastState()
+    if not self:IsOwner() then return end
+    local payload = {
+        npcId = GetNPCId(),
+        state = state,
+        isArrestedLocal = isArrestedLocal,
+        arrestedPlayerName = arrestedPlayerName,
+        attackCount = attackCount,
+        adminProvoked = adminProvoked,
+        isEscorting = isEscorting,
+        hasReachedStay = hasReachedStay,
+        isPlayerSeated = isPlayerSeated
+    }
+    self:SendEvent(EVT_SYNC_STATE, false, SerializeTable(payload))
+end
+
+-- Синхронизация позиции (только владелец)
+local function BroadcastPosition()
+    if not self:IsOwner() then return end
+    local pos = transform.position
+    local rot = transform.eulerAngles
+    local payload = {
+        npcId = GetNPCId(),
+        x = pos.x, y = pos.y, z = pos.z,
+        rotX = rot.x, rotY = rot.y, rotZ = rot.z
+    }
+    self:SendEvent(EVT_SYNC_POS, false, SerializeTable(payload))
+end
+
+-- Синхронизация розыска для КОНКРЕТНОГО игрока
+local function BroadcastWantedForPlayer(playerName)
+    if not self:IsOwner() then return end
+    local pdata = wantedData[playerName] or {}
+    local payload = {
+        npcId = GetNPCId(),
+        targetPlayer = playerName,
+        star1 = pdata.star1 or false,
+        star2 = pdata.star2 or false,
+        star3 = pdata.star3 or false,
+        pursuitTimer = pdata.pursuitTimer or 0,
+        arrestedBy = pdata.arrestedBy
+    }
+    -- cached=true: новые игроки получат актуальный статус розыска
+    self:SendEvent(EVT_SYNC_WANTED, true, SerializeTable(payload))
+end
+
+-- Синхронизация ареста
+local function BroadcastArrest(playerName, arrested, arrestNpcId)
+    local payload = {
+        npcId = GetNPCId(),
+        targetPlayer = playerName,
+        isArrested = arrested,
+        arrestedByNpc = arrestNpcId,
+        pos = arrested and {x=transform.position.x, y=transform.position.y, z=transform.position.z} or nil
+    }
+    self:SendEvent(EVT_SYNC_ARREST, true, SerializeTable(payload))
+end
+
+-- Синхронизация собаки
+local function BroadcastDog(active, pos)
+    if not self:IsOwner() then return end
+    local payload = {
+        npcId = GetNPCId(),
+        dogActive = active,
+        dogPos = pos and {x=pos.x, y=pos.y, z=pos.z} or nil
+    }
+    self:SendEvent(EVT_SYNC_DOG, false, SerializeTable(payload))
+end
+
+-- Синхронизация машины
+local function BroadcastCar(active, pos, rot)
+    if not self:IsOwner() or policeCar == nil then return end
+    local payload = {
+        npcId = GetNPCId(),
+        carActive = active,
+        carPos = pos and {x=pos.x, y=pos.y, z=pos.z} or nil,
+        carRot = rot and {x=rot.x, y=rot.y, z=rot.z} or nil
+    }
+    self:SendEvent(EVT_SYNC_CAR, false, SerializeTable(payload))
+end
+
+-- Синхронизация анимации
+local function BroadcastAnim(animName)
+    if not self:IsOwner() then return end
+    local payload = { npcId = GetNPCId(), anim = animName }
+    self:SendEvent(EVT_SYNC_ANIM, false, SerializeTable(payload))
+end
+
+-- === СЕТЕВЫЕ ФУНКЦИИ: ПРИЁМ ===
+function ReceiveEvent(eventName, arg)
+    if not arg or not arg[0] then return end
+    local dataStr = tostring(arg[0])
+    local data = ParseSimpleJson(dataStr)
+    if not data or not data.npcId then return end
+    
+    -- Игнорируем события от самого себя (дубли)
+    if data.npcId == GetNPCId() and self:IsOwner() then return end
+    
+    local myName = GetLocalPlayerName()
+    
+    if eventName == EVT_SYNC_STATE then
+        if data.state then state = data.state end
+        if data.isArrestedLocal ~= nil then isArrestedLocal = data.isArrestedLocal end
+        if data.arrestedPlayerName then arrestedPlayerName = data.arrestedPlayerName end
+        if data.attackCount then attackCount = data.attackCount end
+        if data.adminProvoked ~= nil then adminProvoked = data.adminProvoked end
+        if data.isEscorting ~= nil then isEscorting = data.isEscorting end
+        if data.hasReachedStay ~= nil then hasReachedStay = data.hasReachedStay end
+        if data.isPlayerSeated ~= nil then isPlayerSeated = data.isPlayerSeated end
+        
+    elseif eventName == EVT_SYNC_POS then
+        -- Синхронизируем позицию только если НЕ владелец
+        if not self:IsOwner() and data.x and data.y and data.z then
+            transform.position = unity.Vector3(data.x, data.y, data.z)
+        end
+        if not self:IsOwner() and data.rotY then
+            local eul = transform.eulerAngles
+            transform.eulerAngles = unity.Vector3(eul.x, data.rotY, eul.z)
+        end
+        
+    elseif eventName == EVT_SYNC_WANTED then
+        -- Обновляем розыск ТОЛЬКО для целевого игрока
+        if data.targetPlayer and data.targetPlayer == myName then
+            wantedData[myName] = wantedData[myName] or {}
+            local wd = wantedData[myName]
+            if data.star1 ~= nil then wd.star1 = data.star1 end
+            if data.star2 ~= nil then wd.star2 = data.star2 end
+            if data.star3 ~= nil then wd.star3 = data.star3 end
+            if data.pursuitTimer then wd.pursuitTimer = data.pursuitTimer end
+            if data.arrestedBy then wd.arrestedBy = data.arrestedBy end
+            WriteWantedCache()
+            
+        elseif data.targetPlayer then
+            -- Если данные для другого игрока — обновляем кэш (для отображения в дебаге)
+            wantedData[data.targetPlayer] = wantedData[data.targetPlayer] or {}
+            local wd = wantedData[data.targetPlayer]
+            if data.star1 ~= nil then wd.star1 = data.star1 end
+            if data.star2 ~= nil then wd.star2 = data.star2 end
+            if data.pursuitTimer then wd.pursuitTimer = data.pursuitTimer end
+        end
+        
+    elseif eventName == EVT_SYNC_ARREST then
+        if data.targetPlayer == myName and data.isArrested ~= nil then
+            -- Этот игрок арестован другим NPC
+            if data.isArrested then
+                -- Начинаем "режим арестованного" локально
+                if not isArrestedLocal and state ~= "Escorting" then
+                    -- Игрок арестован ДРУГИМ копом — сбрасываем аггрессию
+                    if alertPlayed then
+                        alertPlayed = false
+                        delayedSoundPlayed = false
+                        detectionTimer = 0
+                        attackCount = 0
+                    end
+                    if wantedData[myName] then
+                        wantedData[myName].arrestedBy = data.arrestedByNpc
+                    end
+                end
+            else
+                -- Освобождение
+                if wantedData[myName] then
+                    wantedData[myName].arrestedBy = nil
+                end
             end
         end
-    end
-    return false
-end
-local function SyncWantedLogic()
-    ReadWantedData()
-    local totalDetected = 0
-    local myId = GetNPCId()
-    for npcId, data in pairs(globalWantedData) do
-        if data and data.star1 == true then
-            totalDetected = totalDetected + 1
+        
+    elseif eventName == EVT_SYNC_DOG then
+        if data.dogActive ~= nil and dogObject ~= nil then
+            dogIsActive = data.dogActive
+            dogObject:SetActive(dogIsActive)
+            if data.dogPos and dogIsActive and not self:IsOwner() then
+                dogObject.transform.position = unity.Vector3(data.dogPos.x, data.dogPos.y, data.dogPos.z)
+            end
+        end
+        
+    elseif eventName == EVT_SYNC_CAR then
+        if policeCar ~= nil and data.carActive ~= nil then
+            policeCar:SetActive(data.carActive)
+            if data.carPos and not self:IsOwner() then
+                policeCar.transform.position = unity.Vector3(data.carPos.x, data.carPos.y, data.carPos.z)
+            end
+            if data.carRot and not self:IsOwner() then
+                policeCar.transform.eulerAngles = unity.Vector3(data.carRot.x, data.carRot.y, data.carRot.z)
+            end
+        end
+        
+    elseif eventName == EVT_SYNC_ANIM then
+        if data.anim and animation and not self:IsOwner() then
+            animation:Play(data.anim)
         end
     end
-    if totalDetected >= MIN_PLAYERS_FOR_THIRD_STAR then
-        star3Active = true
-    else
-        star3Active = false
+end
+
+-- === ЛОГИКА РОЗЫСКА (пер-плеер) ===
+
+local function GetPlayerWanted(playerName)
+    return wantedData[playerName] or {star1=false, star2=false, star3=false, pursuitTimer=0}
+end
+
+local function UpdatePlayerWanted(playerName, field, value)
+    wantedData[playerName] = wantedData[playerName] or {}
+    wantedData[playerName][field] = value
+    WriteWantedCache()
+    BroadcastWantedForPlayer(playerName)
+end
+
+local function RecalculateThirdStar(playerName)
+    -- 3-я звезда: если у игрока >= MIN_PLAYERS активных преследований
+    local activePursuits = 0
+    for _, wd in pairs(wantedData) do
+        if wd.star1 and wd.pursuitTimer and wd.pursuitTimer > 0 then
+            activePursuits = activePursuits + 1
+        end
+    end
+    local shouldStar3 = activePursuits >= MIN_PLAYERS_FOR_THIRD_STAR
+    if wantedData[playerName] and wantedData[playerName].star3 ~= shouldStar3 then
+        wantedData[playerName].star3 = shouldStar3
+        WriteWantedCache()
+        BroadcastWantedForPlayer(playerName)
     end
 end
+
+-- === ДВИЖЕНИЕ ===
+
 local function GetRandomPoint()
-    local r = RandRange(0.0, WANDER_RADIUS)
-    local a = RandRange(0.0, 6.283185)
+    local r = RandRange(0, WANDER_RADIUS)
+    local a = RandRange(0, 6.283185)
     return unity.Vector3(spawnPos.x + unity.Mathf.Cos(a) * r, spawnPos.y, spawnPos.z + unity.Mathf.Sin(a) * r)
 end
+
 local function RotateTo(dir, speed)
     if dir.sqrMagnitude > 0.0001 then
         local flatDir = unity.Vector3(dir.x, 0, dir.z)
         transform.rotation = unity.Quaternion.Slerp(transform.rotation, unity.Quaternion.LookRotation(flatDir), speed)
     end
 end
+
 local function MoveTo(target, speed, dt)
     local pos = transform.position
     local dir = target - pos
@@ -292,9 +480,12 @@ local function MoveTo(target, speed, dt)
     if dist > 0.1 then
         dir = dir.normalized
         transform.position = pos + dir * math.min(dist, speed * dt)
-        RotateTo(dir, dt * 8.0)
+        RotateTo(dir, dt * 8)
     end
 end
+
+-- === UNITY CALLBACKS ===
+
 function Start()
     animation = gameObject:GetComponent(typeof(unity.Animation))
     alertAudio = gameObject:GetComponent(typeof(unity.AudioSource))
@@ -304,10 +495,12 @@ function Start()
     delayedAudio = charObj and charObj.gameObject:GetComponent(typeof(unity.AudioSource))
     local soundObj = transform:Find("Sounddetection2")
     delayedAudio2 = soundObj and soundObj.gameObject:GetComponent(typeof(unity.AudioSource))
+
     spawnPos = transform.position
     waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
     PlayAnim(ANIM_IDLE)
-    -- === ИНИЦИАЛИЗАЦИЯ СОБАКИ ===
+
+    -- === Инициализация собаки ===
     local dogSpawnObj = transform:Find("DogSpawn")
     if dogSpawnObj ~= nil then
         local dogTransform = dogSpawnObj:Find("dog")
@@ -320,28 +513,26 @@ function Start()
                     dogAnimation = dogChild.gameObject:GetComponent(typeof(unity.Animation))
                 end
                 dogAudioSource = dogObject:GetComponent(typeof(unity.AudioSource))
-                unity.Debug.Log("[NPC] Dog found and hidden")
             end
         end
     end
+
+    -- === Инициализация машины ===
     local polCarChild = transform:Find("PolicayCar")
     if polCarChild ~= nil then
         polCarChild:SetParent(nil)
         policeCar = polCarChild.gameObject
-        -- Спавн машины слева от NPC на расстоянии 5 метров
-        local sideOffset = -transform.right * 5.0
-        local newPos = unity.Vector3(transform.position.x + sideOffset.x, transform.position.y, transform.position.z + sideOffset.z)
+        local sideOffset = transform.right * 5
+        local newPos = unity.Vector3(spawnPos.x + sideOffset.x, spawnPos.y, spawnPos.z + sideOffset.z)
         policeCar.transform.position = newPos
         policeCar.transform.rotation = transform.rotation
         policeCar:SetActive(false)
-        unity.Debug.Log("[NPC] PolicayCar detached and disabled")
+
         local stayObj = policeCar.transform:Find("StayPoint")
         if stayObj ~= nil then stayPoint = stayObj end
         local sitObj = policeCar.transform:Find("PlayerSitPoint")
-        if sitObj ~= nil then
-            playerSitPoint = sitObj
-            unity.Debug.Log("[NPC] PlayerSitPoint found")
-        end
+        if sitObj ~= nil then playerSitPoint = sitObj end
+
         local sirenaObj = policeCar.transform:Find("SirenRoot/Sirena")
         if sirenaObj ~= nil then
             sirenaTransform = sirenaObj
@@ -349,69 +540,62 @@ function Start()
             if sirenaAudio then sirenaAudio.loop = true end
         end
     end
-    -- Инициализация путей кэширования
-    cachedArrestTexturePath = GetCachedTexturePath(ARREST_IMAGE_URL)
-    cachedStarTexturePath = GetCachedTexturePath(STAR_ICON_URL)
-    -- Проверяем кэш для картинки ареста
-    if cachedArrestTexturePath and CS.System.IO.File.Exists(cachedArrestTexturePath) then
-        arrestTexture = LoadTextureFromCache(cachedArrestTexturePath)
-        if arrestTexture then
-            unity.Debug.Log("[NPC] Arrest texture loaded from cache")
-        end
-    end
-    -- Если не загружено из кэша, скачиваем
-    if not arrestTexture and ARREST_IMAGE_URL and ARREST_IMAGE_URL ~= "" then
+
+    -- === Загрузка текстур ===
+    if ARREST_IMAGE_URL and ARREST_IMAGE_URL ~= "" then
         textureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(ARREST_IMAGE_URL)
         textureRequest:SendWebRequest()
     end
-    -- Проверяем кэш для иконки звезды
-    if cachedStarTexturePath and CS.System.IO.File.Exists(cachedStarTexturePath) then
-        starTexture = LoadTextureFromCache(cachedStarTexturePath)
-        if starTexture then
-            unity.Debug.Log("[NPC] Star texture loaded from cache")
-        end
-    end
-    -- Если не загружено из кэша, скачиваем
-    if not starTexture and STAR_ICON_URL and STAR_ICON_URL ~= "" then
+    if STAR_ICON_URL and STAR_ICON_URL ~= "" then
         starTextureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(STAR_ICON_URL)
         starTextureRequest:SendWebRequest()
     end
-    UpdateNPCDataInFile()
+
+    -- === Инициализация кэша и синхронизация ===
+    ReadWantedCache()
+    if self:IsOwner() then
+        BroadcastState()
+        BroadcastPosition()
+        BroadcastCar(policeCar and policeCar.activeSelf, policeCar and policeCar.transform.position, policeCar and policeCar.transform.eulerAngles)
+        BroadcastDog(dogIsActive, dogObject and dogObject.transform.position)
+    end
 end
+
 function OnDestroy()
     if dogObject ~= nil then
         unity.Object.Destroy(dogObject)
         dogObject = nil
         dogIsActive = false
-        unity.Debug.Log("[NPC] Dog destroyed with NPC")
     end
-    -- Уничтожаем полицейскую машину
     if policeCar ~= nil then
         unity.Object.Destroy(policeCar)
     end
-    -- Удаляем данные этого NPC из файла
-    ReadWantedData()
-    globalWantedData[GetNPCId()] = nil
-    WriteWantedData()
+    -- Очищаем кэш: если этот NPC арестовал игрока — освобождаем
+    if arrestedPlayerName and wantedData[arrestedPlayerName] then
+        wantedData[arrestedPlayerName].arrestedBy = nil
+        WriteWantedCache()
+        BroadcastArrest(arrestedPlayerName, false, nil)
+    end
 end
+
 function OnInteract()
     if Player.IsAdmin then
         adminProvoked = true
-        unity.Debug.Log("[NPC] Admin provoked attack")
+        if self:IsOwner() then BroadcastState() end
     end
 end
+
 function Update()
     if spawnPos == nil then return end
     local dt = unity.Time.deltaTime
+    local myName = GetLocalPlayerName()
+    local playerPos = Player.Position
+    local distToPlayer = unity.Vector3.Distance(transform.position, playerPos)
+
     -- === Загрузка текстур ===
     if textureRequest and textureRequest.isDone then
         if not textureRequest.isNetworkError and not textureRequest.isHttpError then
             arrestTexture = CS.UnityEngine.Networking.DownloadHandlerTexture.GetContent(textureRequest)
-            -- Сохраняем в кэш
-            if arrestTexture and cachedArrestTexturePath then
-                SaveTextureToCache(arrestTexture, cachedArrestTexturePath)
-                unity.Debug.Log("[NPC] Arrest texture downloaded and cached")
-            end
         end
         textureRequest:Dispose()
         textureRequest = nil
@@ -419,109 +603,128 @@ function Update()
     if starTextureRequest and starTextureRequest.isDone then
         if not starTextureRequest.isNetworkError and not starTextureRequest.isHttpError then
             starTexture = CS.UnityEngine.Networking.DownloadHandlerTexture.GetContent(starTextureRequest)
-            -- Сохраняем в кэш
-            if starTexture and cachedStarTexturePath then
-                SaveTextureToCache(starTexture, cachedStarTexturePath)
-                unity.Debug.Log("[NPC] Star texture downloaded and cached")
-            end
         end
         starTextureRequest:Dispose()
         starTextureRequest = nil
     end
-    -- === Синхронизация с файлом ===
+
+    -- === Таймеры синхронизации (только владелец отправляет) ===
+    if self:IsOwner() then
+        posSyncTimer = posSyncTimer + dt
+        if posSyncTimer >= POS_SYNC_INTERVAL then
+            posSyncTimer = 0
+            BroadcastPosition()
+        end
+        stateSyncTimer = stateSyncTimer + dt
+        if stateSyncTimer >= STATE_SYNC_INTERVAL then
+            stateSyncTimer = 0
+            local curStateKey = state .. "|".. tostring(isArrestedLocal) .. "|".. tostring(attackCount)
+            if curStateKey ~= lastSentState then
+                lastSentState = curStateKey
+                BroadcastState()
+            end
+        end
+        wantedSyncTimer = wantedSyncTimer + dt
+        if wantedSyncTimer >= WANTED_SYNC_INTERVAL and wantedData[myName] then
+            wantedSyncTimer = 0
+            BroadcastWantedForPlayer(myName)
+            RecalculateThirdStar(myName)
+        end
+    end
+
+    -- === Локальный кэш файла ===
     fileReadTimer = fileReadTimer + dt
     if fileReadTimer >= FILE_READ_INTERVAL then
         fileReadTimer = 0
-        SyncWantedLogic()
-        UpdateNPCDataInFile()
+        ReadWantedCache()
+        WriteWantedCache()
     end
-    -- === Управление админа (звезды) ===
+
+    -- === Админ-управление (локально + синхронизация) ===
     if Player.IsAdmin then
         if unity.Input.GetKeyDown(unity.KeyCode.Alpha0) then
-            star1Active = not star1Active
-            UpdateNPCDataInFile()
+            wantedData[myName] = wantedData[myName] or {}
+            wantedData[myName].star1 = not (wantedData[myName].star1 or false)
+            WriteWantedCache()
+            if self:IsOwner() then BroadcastWantedForPlayer(myName) end
         end
         if unity.Input.GetKeyDown(unity.KeyCode.Minus) then
-            star2Active = not star2Active
-            UpdateNPCDataInFile()
+            wantedData[myName] = wantedData[myName] or {}
+            wantedData[myName].star2 = not (wantedData[myName].star2 or false)
+            WriteWantedCache()
+            if self:IsOwner() then BroadcastWantedForPlayer(myName) end
         end
         if unity.Input.GetKeyDown(unity.KeyCode.Equals) then
-            star3Active = not star3Active
-            UpdateNPCDataInFile()
+            wantedData[myName] = wantedData[myName] or {}
+            wantedData[myName].star3 = not (wantedData[myName].star3 or false)
+            WriteWantedCache()
+            if self:IsOwner() then BroadcastWantedForPlayer(myName) end
         end
     end
-    -- === 🔧 ЛОГИКА СОБАКИ (ПЕРЕМЕЩЕНА ВНАЧАЛО) ===
-        if dogIsActive and dogObject ~= nil then
-                local playerPos = Player.Position
-                local dogPos = dogObject.transform.position
-                if isArrested or (IsPlayerAlreadyArrested() and not isArrested and state ~= "Escorting") then
-                        -- Игрок арестован — собака прекращает преследование
-                        dogChaseTimer = 0.0
-                        if dogAnimation then
-                                dogAnimation:Play(DOG_ANIM_IDLE)
-                        end
-                        if dogAudioSource and dogAudioSource.isPlaying then
-                                dogAudioSource:Stop()
-                        end
-                else
-                        -- === Движение к игроку ===
-                        local dir = playerPos - dogPos
-                        dir.y = 0
-                        if dir.sqrMagnitude > 0.0001 then
-                                dir = dir.normalized
-                                local dist = unity.Vector3.Distance(dogPos, playerPos)
-                                dogObject.transform.position = dogPos + dir * math.min(dist, DOG_CHASE_SPEED * dt)
-                                dogObject.transform.rotation = unity.Quaternion.Slerp(
-                                        dogObject.transform.rotation,
-                                        unity.Quaternion.LookRotation(dir),
-                                        dt * 8.0
-                                )
-                        end
-                        -- === 🔥 Атака собаки: урон 0 на дистанции 1 метр ===
-                        local distToPlayer = unity.Vector3.Distance(dogPos, playerPos)
-                        if distToPlayer <= DOG_ATTACK_DIST then
-                                if unity.Time.time - dogLastAttackTime >= DOG_ATTACK_COOLDOWN then
-                                        dogLastAttackTime = unity.Time.time
-                                        Player:TakeDamage(DOG_ATTACK_DAMAGE)  -- Наносим 0 урона
-                                        -- Можно добавить звук "лая" или визуальный эффект здесь
-                                        unity.Debug.Log("[DOG] Attack player (damage: 0)")
-                                end
-                        end
-                        -- Анимация бега (обновляем каждый кадр)
-                        if dogAnimation then
-                                dogAnimation:Play(DOG_ANIM_RUN)
-                        end
-                        -- Звук собаки каждые 8 секунд
-                        dogLastSoundTime = dogLastSoundTime + dt
-                        if dogLastSoundTime >= DOG_SOUND_INTERVAL then
-                                dogLastSoundTime = 0.0
-                                if dogAudioSource then
-                                        dogAudioSource:Play()
-                                end
-                        end
-                end
-        end
-    -- === 🔧 КОНЕЦ ЛОГИКИ СОБАКИ ===
-    -- === Проверка: арестован ли игрок другим NPC? ===
-    local playerArrestedByOther = IsPlayerAlreadyArrested() and not isArrested and state ~= "Escorting"
-    if playerArrestedByOther then
-        -- СБРОС АГРЕССИИ И ВОЗВРАТ К ПАТРУЛЮ
+
+    -- === Проверка: арестован ли этот игрок ДРУГИМ NPC? ===
+    local wd = wantedData[myName] or {}
+    local arrestedByOther = wd.arrestedBy and wd.arrestedBy ~= GetNPCId() and not isArrestedLocal
+
+    if arrestedByOther then
+        -- Сброс аггрессии, возврат к патрулю
         if state ~= "Idle" and state ~= "Wander" then
             state = "Idle"
             PlayAnim(ANIM_IDLE)
+            if self:IsOwner() then BroadcastAnim(ANIM_IDLE) end
             alertPlayed = false
             delayedSoundPlayed = false
-            detectionTimer = 0.0
+            detectionTimer = 0
             attackCount = 0
             adminProvoked = false
-            pursuitTimer = 0.0
+            if wd then wd.pursuitTimer = 0 end
             targetPos = nil
             waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
+            if self:IsOwner() then BroadcastState() end
         end
-        -- Не делаем return, даём коду идти дальше до блока патруля
     end
-    -- === ЛОГИКА АРЕСТА (ЕСЛИ МЫ АРЕСТОВАЛИ) ===
-    if isArrested then
+
+    -- === 🔧 ЛОГИКА СОБАКИ ===
+    if dogIsActive and dogObject ~= nil then
+        local dogPos = dogObject.transform.position
+        if arrestedByOther or (wd.arrestedBy and wd.arrestedBy ~= GetNPCId()) then
+            -- Игрок арестован другим — собака стоп
+            if dogAnimation then dogAnimation:Play(DOG_ANIM_IDLE) end
+            if dogAudioSource and dogAudioSource.isPlaying then dogAudioSource:Stop() end
+        else
+            -- Движение к игроку
+            local dir = playerPos - dogPos
+            dir.y = 0
+            if dir.sqrMagnitude > 0.0001 then
+                dir = dir.normalized
+                local d = unity.Vector3.Distance(dogPos, playerPos)
+                dogObject.transform.position = dogPos + dir * math.min(d, DOG_CHASE_SPEED * dt)
+                dogObject.transform.rotation = unity.Quaternion.Slerp(
+                    dogObject.transform.rotation,
+                    unity.Quaternion.LookRotation(dir),
+                    dt * 8
+                )
+            end
+            -- Атака
+            if unity.Vector3.Distance(dogPos, playerPos) <= DOG_ATTACK_DIST then
+                if unity.Time.time - dogLastAttackTime >= DOG_ATTACK_COOLDOWN then
+                    dogLastAttackTime = unity.Time.time
+                    Player:TakeDamage(DOG_ATTACK_DAMAGE)
+                end
+            end
+            -- Анимация
+            if dogAnimation then dogAnimation:Play(DOG_ANIM_RUN) end
+            -- Звук
+            dogLastSoundTime = dogLastSoundTime + dt
+            if dogLastSoundTime >= DOG_SOUND_INTERVAL then
+                dogLastSoundTime = 0
+                if dogAudioSource then dogAudioSource:Play() end
+            end
+        end
+    end
+
+    -- === 🔧 ЛОГИКА АРЕСТА (если МЫ арестовали) ===
+    if isArrestedLocal then
         if arrestTimer > 0 then
             arrestTimer = arrestTimer - dt
             Player.Position = arrestPos
@@ -529,7 +732,10 @@ function Update()
             return
         end
         if not isEscorting then
-            if policeCar ~= nil then policeCar:SetActive(true) end
+            if policeCar ~= nil then
+                policeCar:SetActive(true)
+                if self:IsOwner() then BroadcastCar(true, policeCar.transform.position, policeCar.transform.eulerAngles) end
+            end
             isEscorting = true
             state = "Escorting"
             hasReachedStay = false
@@ -537,7 +743,10 @@ function Update()
             isPlayerLocked = false
             isSittingTimerActive = false
             PlayAnim(ANIM_RUN)
-            UpdateNPCDataInFile()
+            if self:IsOwner() then
+                BroadcastState()
+                BroadcastAnim(ANIM_RUN)
+            end
         end
         if stayPoint ~= nil and not hasReachedStay then
             local toStay = stayPoint.position - transform.position
@@ -547,11 +756,12 @@ function Update()
             else
                 hasReachedStay = true
                 PlayAnim(ANIM_IDLE)
+                if self:IsOwner() then BroadcastAnim(ANIM_IDLE) end
             end
         end
         if hasReachedStay then
             if not isSittingTimerActive then
-                reachedStayTimer = 0.0
+                reachedStayTimer = 0
                 isSittingTimerActive = true
             else
                 reachedStayTimer = reachedStayTimer + dt
@@ -563,6 +773,7 @@ function Update()
                         Chat:AddMessage(Player.Name .. " помещён в полицейскую машину.", "[00FF00]")
                     end
                     PlayAnim(ANIM_IDLE)
+                    if self:IsOwner() then BroadcastAnim(ANIM_IDLE) end
                 end
             end
         end
@@ -585,121 +796,141 @@ function Update()
         end
         return
     end
-    -- === ЛОГИКА АГГРО (если игрок НЕ арестован другим) ===
-    if not playerArrestedByOther then
-        local playerPos = Player.Position
-        local dist = unity.Vector3.Distance(transform.position, playerPos)
-        local shouldAggro = dist <= CHASE_RADIUS and ((not Player.IsAdmin) or adminProvoked)
+
+    -- === 🔧 ЛОГИКА АГГРО (только если игрок НЕ арестован другим) ===
+    if not arrestedByOther then
+        local shouldAggro = distToPlayer <= CHASE_RADIUS and ((not Player.IsAdmin) or adminProvoked)
+        local wd = wantedData[myName] or {}
+
         if shouldAggro then
+            -- Звуки
             if not alertPlayed then
                 if alertAudio then alertAudio:Play() end
                 alertPlayed = true
                 delayedSoundPlayed = false
-                detectionTimer = 0.0
+                detectionTimer = 0
             end
             if not delayedSoundPlayed then
                 detectionTimer = detectionTimer + dt
                 if detectionTimer >= 2.0 then
-                    local chosenAudio = nil
+                    local chosen = nil
                     if delayedAudio and delayedAudio2 then
-                        chosenAudio = unity.Random.value < 0.5 and delayedAudio or delayedAudio2
-                    elseif delayedAudio then
-                        chosenAudio = delayedAudio
-                    elseif delayedAudio2 then
-                        chosenAudio = delayedAudio2
-                    end
-                    if chosenAudio then chosenAudio:Play() end
+                        chosen = unity.Random.value < 0.5 and delayedAudio or delayedAudio2
+                    elseif delayedAudio then chosen = delayedAudio
+                    elseif delayedAudio2 then chosen = delayedAudio2 end
+                    if chosen then chosen:Play() end
                     delayedSoundPlayed = true
                 end
             end
-            if not star1Active then
-                star1Active = true
-                UpdateNPCDataInFile()
+
+            -- Обновление розыска ДЛЯ ЭТОГО ИГРОКА
+            if not wd.star1 then
+                UpdatePlayerWanted(myName, "star1", true)
             end
-            pursuitTimer = pursuitTimer + dt
-            if pursuitTimer >= PURSUIT_TIME_FOR_SECOND_STAR and not star2Active then
-                star2Active = true
-                UpdateNPCDataInFile()
-                -- Активация собаки при второй звезде
+            wd.pursuitTimer = (wd.pursuitTimer or 0) + dt
+            UpdatePlayerWanted(myName, "pursuitTimer", wd.pursuitTimer)
+
+            -- Вторая звезда
+            if wd.pursuitTimer >= PURSUIT_TIME_FOR_SECOND_STAR and not wd.star2 then
+                UpdatePlayerWanted(myName, "star2", true)
+                -- Активация собаки
                 if dogObject ~= nil and not dogIsActive then
                     dogObject.transform:SetParent(nil)
-                                        dogObject.transform.position = transform.position - transform.right * 2.0
+                    dogObject.transform.position = transform.position - transform.right * 2
                     dogObject:SetActive(true)
                     dogIsActive = true
-                    dogChaseTimer = 0.0
-                    dogLastSoundTime = 0.0
-                    if dogAnimation then
-                        dogAnimation:Play(DOG_ANIM_RUN)
+                    dogChaseTimer = 0
+                    dogLastSoundTime = 0
+                    if dogAnimation then dogAnimation:Play(DOG_ANIM_RUN) end
+                    if dogAudioSource then dogAudioSource:Play() end
+                    if self:IsOwner() then BroadcastDog(true, dogObject.transform.position) end
+                end
+            end
+
+            -- Третья звезда (пересчёт)
+            RecalculateThirdStar(myName)
+
+            -- Логика атаки
+            if state == "Attacking" then
+                attackTimer = attackTimer - dt
+                if attackTimer <= 0 then
+                    attackCount = attackCount + 1
+                    if attackCount >= MAX_ATTACKS then
+                        -- АРЕСТ
+                        isArrestedLocal = true
+                        arrestTimer = ARREST_DELAY
+                        arrestPos = playerPos
+                        arrestedPlayerName = myName
+                        Chat:AddMessage(Player.Name .. " был арестован!", "[FF0000]")
+                        UpdatePlayerWanted(myName, "arrestedBy", GetNPCId())
+                        BroadcastArrest(myName, true, GetNPCId())
+                        if self:IsOwner() then BroadcastState() end
+                        return
                     end
-                                        if dogAudioSource then
-                                                dogAudioSource:Play()
-                                        end
-                    unity.Debug.Log("[NPC] Dog activated at star 2")
+                    state = "Chase"
+                    PlayAnim(ANIM_RUN)
+                    if self:IsOwner() then
+                        BroadcastState()
+                        BroadcastAnim(ANIM_RUN)
+                    end
                 end
+                return
             end
-        else
-            if alertPlayed then
-                alertPlayed = false
-                delayedSoundPlayed = false
-                detectionTimer = 0.0
-                attackCount = 0
-                adminProvoked = false
-                if star1Active then
-                    star1Active = false
-                    pursuitTimer = 0.0
-                    UpdateNPCDataInFile()
-                end
-            end
-        end
-        -- === Логика атаки ===
-        if state == "Attacking" then
-            attackTimer = attackTimer - dt
-            if attackTimer <= 0 then
-                attackCount = attackCount + 1
-                if attackCount >= MAX_ATTACKS then
-                    isArrested = true
-                    arrestTimer = ARREST_DELAY
-                    arrestPos = playerPos
-                    Chat:AddMessage(Player.Name .. " был арестован!", "[FF0000]")
-                    UpdateNPCDataInFile()
-                    return
-                end
-                state = "Chase"
-                PlayAnim(ANIM_RUN)
-            end
-            return
-        end
-        if shouldAggro then
-            if dist <= ATTACK_DIST then
+
+            if distToPlayer <= ATTACK_DIST then
                 if state ~= "Attacking" then
                     state = "Attacking"
                     attackTimer = ATTACK_COOLDOWN
                     PlayAnim(ANIM_ATTACK)
+                    if self:IsOwner() then BroadcastAnim(ANIM_ATTACK) end
                     Player:TakeDamage(ATTACK_DAMAGE)
                     if attackAudio then attackAudio:Play() end
+                    if self:IsOwner() then BroadcastState() end
                 end
             else
                 if state ~= "Chase" then
                     state = "Chase"
                     PlayAnim(ANIM_RUN)
+                    if self:IsOwner() then BroadcastAnim(ANIM_RUN) end
                 end
                 MoveTo(playerPos, CHASE_SPEED, dt)
             end
-            return -- 🔥 ВАЖНО: этот return больше не блокирует собаку, т.к. её логика уже выполнена выше
+            return
+        else
+            -- Игрок вне радиуса — сброс аггрессии для ЭТОГО игрока
+            if alertPlayed then
+                alertPlayed = false
+                delayedSoundPlayed = false
+                detectionTimer = 0
+                attackCount = 0
+                adminProvoked = false
+                if wd.star1 then
+                    UpdatePlayerWanted(myName, "star1", false)
+                    UpdatePlayerWanted(myName, "pursuitTimer", 0)
+                    UpdatePlayerWanted(myName, "star2", false)
+                end
+            end
         end
     end
-    -- === ЛОГИКА ПАТРУЛЯ (IDLE / WANDER) ===
+
+    -- === 🔧 ПАТРУЛЬ (IDLE / WANDER) ===
     if state == "Chase" or state == "Attacking" then
         state = "Idle"
         PlayAnim(ANIM_IDLE)
+        if self:IsOwner() then
+            BroadcastState()
+            BroadcastAnim(ANIM_IDLE)
+        end
         waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
     end
+
     if state == "Idle" then
         waitTimer = waitTimer - dt
         if waitTimer <= 0 then
             state = "Wander"
             targetPos = GetRandomPoint()
             PlayAnim(ANIM_RUN)
+            if self:IsOwner() then BroadcastAnim(ANIM_RUN) end
         end
     elseif state == "Wander" then
         if targetPos == nil then
@@ -711,55 +942,46 @@ function Update()
                 state = "Idle"
                 waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
                 PlayAnim(ANIM_IDLE)
+                if self:IsOwner() then BroadcastAnim(ANIM_IDLE) end
             else
                 MoveTo(targetPos, WALK_SPEED, dt)
             end
         end
     end
 end
+
 function OnGUI()
-    if isArrested and arrestTexture ~= nil then
-        local screenW = unity.Screen.width
-        local screenH = unity.Screen.height
-        local imgW = 200
-        local imgH = 200
-        local margin = 20
-        local rect = unity.Rect(screenW - imgW - margin, screenH - imgH - margin, imgW, imgH)
+    if isArrestedLocal and arrestTexture ~= nil then
+        local sw = unity.Screen.width
+        local sh = unity.Screen.height
+        local rect = unity.Rect(sw - 220, sh - 220, 200, 200)
         unity.GUI.DrawTexture(rect, arrestTexture)
     end
-    -- Отрисовка звезд: 1 (слева), 2 (центр), 3 (справа у края)
+
+    -- Отрисовка звёзд (пер-плеер)
     if starTexture ~= nil then
-        local screenW = unity.Screen.width
+        local myName = GetLocalPlayerName()
+        local wd = wantedData[myName] or {star1=false, star2=false, star3=false}
+        local sw = unity.Screen.width
         local iconSize = 40
         local margin = 10
         local spacing = 5
-        -- Правый край экрана минус отступ минус ширина иконки = позиция 3-й звезды
-        local rightMostX = screenW - margin - iconSize
+        local rightMostX = sw - margin - iconSize
         local startY = margin
-        -- Рисуем от 3 к 1, чтобы расположить их справа налево визуально,
-        -- но индекс 1 будет слева в группе.
-        -- Порядок отрисовки: 3 (справа), 2 (центр), 1 (слева в группе)
+
         for i = 3, 1, -1 do
             local isActive = false
-            if i == 1 then isActive = star1Active
-            elseif i == 2 then isActive = star2Active
-            elseif i == 3 then isActive = star3Active
-            end
-            -- Вычисляем X.
-            -- i=3: offset = 0 -> x = rightMostX
-            -- i=2: offset = size+space -> x = rightMostX - (size+space)
-            -- i=1: offset = 2*(size+space) -> x = rightMostX - 2*(size+space)
+            if i == 1 then isActive = wd.star1
+            elseif i == 2 then isActive = wd.star2
+            elseif i == 3 then isActive = wd.star3 end
+
             local offset = (3 - i) * (iconSize + spacing)
             local x = rightMostX - offset
-            local y = startY
-            local rect = unity.Rect(x, y, iconSize, iconSize)
-            if not isActive then
-                unity.GUI.color = unity.Color(0.5, 0.5, 0.5, 1.0)
-            else
-                unity.GUI.color = unity.Color(1.0, 1.0, 1.0, 1.0)
-            end
+            local rect = unity.Rect(x, startY, iconSize, iconSize)
+
+            unity.GUI.color = isActive and unity.Color(1,1,1,1) or unity.Color(0.5,0.5,0.5,1)
             unity.GUI.DrawTexture(rect, starTexture)
         end
-        unity.GUI.color = unity.Color(1.0, 1.0, 1.0, 1.0)
+        unity.GUI.color = unity.Color(1,1,1,1)
     end
 end
