@@ -634,21 +634,21 @@ function Start()
     end
 
     -- === Загрузка текстур ===
-	if ARREST_IMAGE_URL and ARREST_IMAGE_URL ~= "" then
-		CS.UnityEngine.Debug.Log("[NPCGermanPolice2] Загрузка картинки ареста: " .. ARREST_IMAGE_URL)
-		textureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(ARREST_IMAGE_URL)
-		textureRequest:SendWebRequest()
-	else
-		CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] ARREST_IMAGE_URL не задан!")
-	end
+    if ARREST_IMAGE_URL and ARREST_IMAGE_URL ~= "" then
+        CS.UnityEngine.Debug.Log("[NPCGermanPolice2] Загрузка картинки ареста: " .. ARREST_IMAGE_URL)
+        textureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(ARREST_IMAGE_URL)
+        textureRequest:SendWebRequest()
+    else
+        CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] ARREST_IMAGE_URL не задан!")
+    end
 
-	if STAR_ICON_URL and STAR_ICON_URL ~= "" then
-		CS.UnityEngine.Debug.Log("[NPCGermanPolice2] Загрузка иконки звезды: " .. STAR_ICON_URL)
-		starTextureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(STAR_ICON_URL)
-		starTextureRequest:SendWebRequest()
-	else
-		CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] STAR_ICON_URL не задан!")
-	end
+    if STAR_ICON_URL and STAR_ICON_URL ~= "" then
+        CS.UnityEngine.Debug.Log("[NPCGermanPolice2] Загрузка иконки звезды: " .. STAR_ICON_URL)
+        starTextureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(STAR_ICON_URL)
+        starTextureRequest:SendWebRequest()
+    else
+        CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] STAR_ICON_URL не задан!")
+    end
 
     -- === Инициализация кэша ===
     ReadWantedCache()
