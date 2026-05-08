@@ -5,7 +5,7 @@ local CHASE_RADIUS    = 70.0
 local ATTACK_DIST     = 1.5
 local CHASE_SPEED     = 3.5
 local ATTACK_COOLDOWN = 0.5
-local ATTACK_DAMAGE   = 0
+local ATTACK_DAMAGE   = 0  
 local MAX_ATTACKS     = 5
 local ANIM_RUN        = "run_3"
 local ANIM_ATTACK     = "dig"
@@ -18,41 +18,27 @@ local DOG_ANIM_IDLE   = "idle_3"
 local DOG_SOUND_INTERVAL = 5.0
 local DOG_ATTACK_DIST = 2.0
 local DOG_ATTACK_COOLDOWN = 0.5
-local DOG_ATTACK_DAMAGE = 0 
+local DOG_ATTACK_DAMAGE = 0
 
 -- URL картинки, которая появится при аресте
 local ARREST_IMAGE_URL = "https://raw.githubusercontent.com/0x2171/DiggerMod/refs/heads/main/narucniki.png"
 local STAR_ICON_URL = "https://raw.githubusercontent.com/0x2171/DiggerMod/refs/heads/main/CopIcon.png"
 
--- === ПУТЬ К ФАЙЛУ (ЛОКАЛЬНЫЙ КЭШ) ===
-local PROPERTIES_FILE_PATH = "C:\\\\DANZIG\\\\properties.json"
+-- === НАСТРОЙКИ РОЗЫСКА ===
 local PURSUIT_TIME_FOR_SECOND_STAR = 20.0
 local MIN_PLAYERS_FOR_THIRD_STAR = 3
 
--- === СЕТЕВЫЕ СОБЫТИЯ ===
-local EVT_SYNC_STATE    = "NPC:SyncState"
-local EVT_SYNC_POS      = "NPC:SyncPos"
-local EVT_SYNC_WANTED   = "NPC:SyncWanted"
-local EVT_SYNC_ARREST   = "NPC:SyncArrest"
-local EVT_SYNC_DOG      = "NPC:SyncDog"
-local EVT_SYNC_CAR      = "NPC:SyncCar"
-local EVT_SYNC_ANIM     = "NPC:SyncAnim"
-
--- === ТАЙМЕРЫ СИНХРОНИЗАЦИИ ===
-local POS_SYNC_INTERVAL   = 0.15
-local STATE_SYNC_INTERVAL = 0.3
-local WANTED_SYNC_INTERVAL = 0.5
-local posSyncTimer = 0
-local stateSyncTimer = 0
-local wantedSyncTimer = 0
-local lastSentState = nil
-local lastSentPos = nil
+-- === КЭШ СОСТОЯНИЯ (для синхронизации ареста между NPC) ===
+local PROPERTIES_FILE_PATH = "C:\\\\DANZIG\\\\properties.json"
+local FILE_READ_INTERVAL = 0.5
+local fileReadTimer = 0
 
 -- === ПЕРЕМЕННЫЕ ДЛЯ ТЕКСТУР ===
 local arrestTexture = nil
 local starTexture = nil
 local textureRequest = nil
 local starTextureRequest = nil
+local _starTextureWarned = false
 
 -- === СОСТОЯНИЕ NPC ===
 local animation = nil
@@ -77,10 +63,9 @@ local WAIT_MAX = 3
 local WALK_SPEED = 1.6
 local adminProvoked = false
 
--- === ПЕР-ПЛЕЕР РОЗЫСК ===
+-- === ПЕР-ПЛЕЕР РОЗЫСК (в памяти + кэш ареста) ===
 local wantedData = {}
-local fileReadTimer = 0
-local FILE_READ_INTERVAL = 0.5
+local arrestedByCache = {}  -- playerName -> npcId (кто арестовал)
 
 -- === СОБАКА ===
 local dogObject = nil
@@ -117,66 +102,37 @@ local SIRENA_ROT_SPEED = 180
 local function RandRange(a, b) return unity.Random.Range(a, b) end
 local function PlayAnim(name) if animation then animation:Play(name) end end
 
--- === JSON: Сериализация ===
-local function SerializeTable(val, s, depth)
-    s = s or "{}"
-    depth = depth or 0
-    if type(val) == "table" then
-        local s2 = "{"
-        local count = 0
-        for k, v in pairs(val) do
-            count = count + 1
-            if count > 1 then s2 = s2 .. "," end
-            local k_str = tostring(k)
-            local v_str
-            if type(v) == "table" then
-                v_str = SerializeTable(v, nil, depth + 1)
-            elseif type(v) == "boolean" then
-                v_str = tostring(v)
-            elseif type(v) == "number" then
-                v_str = tostring(v)
-            else
-                v_str = "\"" .. tostring(v) .. "\""
-            end
-            s2 = s2 .. "\n" .. string.rep("  ", depth + 1) .. "\"" .. k_str .. "\": " .. v_str
-        end
-        s2 = s2 .. "\n" .. string.rep("  ", depth) .. "}"
-        return s2
-    elseif type(val) == "string" then
-        return "\"" .. val .. "\""
-    elseif type(val) == "number" or type(val) == "boolean" then
-        return tostring(val)
-    else
-        return "null"
-    end
+-- === ЛОКАЛЬНЫЕ ФУНКЦИИ ===
+local function GetLocalPlayerName()
+    return Player.Name or "Unknown"
 end
 
--- === JSON: Парсинг (улучшенный) ===
-local function ParseSimpleJson(jsonStr)
+local function GetNPCId()
+    return "DNPC_German_Police_" .. tostring(transform:GetInstanceID())
+end
+
+-- === МИНИМАЛЬНЫЙ JSON для кэша ареста ===
+local function SerializeArrestCache(data)
+    local result = "{"
+    local first = true
+    for pname, npcId in pairs(data) do
+        if not first then result = result .. "," end
+        result = result .. "\"" .. pname .. "\":\"" .. npcId .. "\""
+        first = false
+    end
+    return result .. "}"
+end
+
+local function ParseArrestCache(jsonStr)
     local result = {}
     if not jsonStr or jsonStr == "" then return result end
-    local clean = jsonStr:gsub("^%s*{", ""):gsub("}%s*$", ""):gsub("\n", " ")
-    
-    for key, val in clean:gmatch('"([^"]+)"%s*:%s*([^,}]+)') do
-        val = val:gsub("^%s*", ""):gsub("%s*$", "")
-        if val == "true" then
-            result[key] = true
-        elseif val == "false" then
-            result[key] = false
-        else
-            -- Гарантированная конвертация в число, если возможно
-            local num = tonumber(val)
-            if num then
-                result[key] = num
-            else
-                result[key] = val:gsub('"', "")
-            end
-        end
+    for pname, npcId in jsonStr:gmatch('"([^"]+)"%s*:%s*"([^"]*)"') do
+        result[pname] = npcId
     end
     return result
 end
 
--- === РАБОТА С ФАЙЛОМ ===
+-- === РАБОТА С ФАЙЛОМ (только для кэша ареста) ===
 local function EnsureDirectoryExists(path)
     local dir = CS.System.IO.Path.GetDirectoryName(path)
     if dir and not CS.System.IO.Directory.Exists(dir) then
@@ -184,307 +140,57 @@ local function EnsureDirectoryExists(path)
     end
 end
 
-local function ReadWantedCache()
-    wantedData = {}
+local function ReadArrestCache()
+    arrestedByCache = {}
     if not CS.System.IO.File.Exists(PROPERTIES_FILE_PATH) then return end
     
     local content = CS.System.IO.File.ReadAllText(PROPERTIES_FILE_PATH)
     if not content or content == "" then return end
     
-    local parsed = ParseSimpleJson(content)
-    if type(parsed) ~= "table" then return end
-    
-    for key, val in pairs(parsed) do
-        local pname, field = key:match("^([^_]+)_(.+)$")
-        if pname and field then
-            wantedData[pname] = wantedData[pname] or {}
-            if field == "star1" or field == "star2" or field == "star3" then
-                wantedData[pname][field] = (val == true)
-            elseif field == "pursuitTimer" then
-                wantedData[pname][field] = type(val) == "number" and val or 0
-            else
-                wantedData[pname][field] = val
-            end
+    local parsed = ParseArrestCache(content)
+    for pname, npcId in pairs(parsed) do
+        if npcId and npcId ~= "" then
+            arrestedByCache[pname] = npcId
         end
+    end
+    
+    for pname, npcId in pairs(arrestedByCache) do
+        wantedData[pname] = wantedData[pname] or {}
+        wantedData[pname].arrestedBy = npcId
     end
 end
 
-local function WriteWantedCache()
+local function WriteArrestCache()
     EnsureDirectoryExists(PROPERTIES_FILE_PATH)
-    local flat = {}
-    
-    if type(wantedData) == "table" then
-        for pname, pdata in pairs(wantedData) do
-            if type(pdata) == "table" then
-                for field, val in pairs(pdata) do
-                    flat[pname .. "_" .. field] = val
-                end
-            end
+    local arrestData = {}
+    for pname, pdata in pairs(wantedData) do
+        if pdata and pdata.arrestedBy then
+            arrestData[pname] = pdata.arrestedBy
         end
     end
+    for pname, npcId in pairs(arrestedByCache) do
+        arrestData[pname] = npcId
+    end
     
-    local jsonStr = SerializeTable(flat)
+    local jsonStr = SerializeArrestCache(arrestData)
     CS.System.IO.File.WriteAllText(PROPERTIES_FILE_PATH, jsonStr)
 end
 
-local function GetNPCId()
-    return "DNPC_German_Police_" .. tostring(transform:GetInstanceID())
-end
-
--- === СЕТЕВЫЕ ФУНКЦИИ: ОТПРАВКА ===
-local function GetLocalPlayerName()
-    return Player.Name or "Unknown"
-end
-
-local function BroadcastState()
-    local payload = {
-        npcId = GetNPCId(),
-        state = state,
-        isArrestedLocal = isArrestedLocal,
-        arrestedPlayerName = arrestedPlayerName,
-        attackCount = attackCount,
-        adminProvoked = adminProvoked,
-        isEscorting = isEscorting,
-        hasReachedStay = hasReachedStay,
-        isPlayerSeated = isPlayerSeated
-    }
-    self:SendEvent(EVT_SYNC_STATE, false, SerializeTable(payload))
-end
-
-local function BroadcastPosition(force)
-    local pos = transform.position
-    local rot = transform.eulerAngles
-    
-    if not force and lastSentPos then
-        local dx = pos.x - lastSentPos.x
-        local dy = pos.y - lastSentPos.y
-        local dz = pos.z - lastSentPos.z
-        if dx*dx + dy*dy + dz*dz < 0.01 then return end
-    end
-    
-    lastSentPos = {x=pos.x, y=pos.y, z=pos.z}
-    local payload = {
-        npcId = GetNPCId(),
-        x = pos.x, y = pos.y, z = pos.z,
-        rotX = rot.x, rotY = rot.y, rotZ = rot.z
-    }
-    self:SendEvent(EVT_SYNC_POS, false, SerializeTable(payload))
-end
-
-local function BroadcastWantedForPlayer(playerName)
-    local pdata = wantedData[playerName] or {}
-    local payload = {
-        npcId = GetNPCId(),
-        targetPlayer = playerName,
-        star1 = pdata.star1 or false,
-        star2 = pdata.star2 or false,
-        star3 = pdata.star3 or false,
-        pursuitTimer = pdata.pursuitTimer or 0,
-        arrestedBy = pdata.arrestedBy
-    }
-    self:SendEvent(EVT_SYNC_WANTED, true, SerializeTable(payload))
-end
-
-local function BroadcastArrest(playerName, arrested, arrestNpcId)
-    local payload = {
-        npcId = GetNPCId(),
-        targetPlayer = playerName,
-        isArrested = arrested,
-        arrestedByNpc = arrestNpcId,
-        pos = arrested and {x=transform.position.x, y=transform.position.y, z=transform.position.z} or nil
-    }
-    self:SendEvent(EVT_SYNC_ARREST, true, SerializeTable(payload))
-end
-
-local function BroadcastDog(active, pos)
-    local payload = {
-        npcId = GetNPCId(),
-        dogActive = active,
-        dogPos = pos and {x=pos.x, y=pos.y, z=pos.z} or nil
-    }
-    self:SendEvent(EVT_SYNC_DOG, false, SerializeTable(payload))
-end
-
-local function BroadcastCar(active, pos, rot)
-    if policeCar == nil then return end
-    local payload = {
-        npcId = GetNPCId(),
-        carActive = active,
-        carPos = pos and {x=pos.x, y=pos.y, z=pos.z} or nil,
-        carRot = rot and {x=rot.x, y=rot.y, z=rot.z} or nil
-    }
-    self:SendEvent(EVT_SYNC_CAR, false, SerializeTable(payload))
-end
-
-local function BroadcastAnim(animName)
-    local payload = { npcId = GetNPCId(), anim = animName }
-    self:SendEvent(EVT_SYNC_ANIM, false, SerializeTable(payload))
-end
-
--- === СЕТЕВЫЕ ФУНКЦИИ: ПРИЁМ (ИСПРАВЛЕНО) ===
-function ReceiveEvent(eventName, arg)
-    if not arg then return end
-    
-    -- 🔧 БЕЗОПАСНОЕ ПОЛУЧЕНИЕ ПЕРВОГО ЭЛЕМЕНТА
-    local firstArg = nil
-    
-    -- Проверяем длину массива перед доступом
-    local argLength = 0
-    local success, lenResult = pcall(function() 
-        if type(arg) == "table" then
-            return #arg 
-        end
-        return 0
-    end)
-    if success and lenResult and lenResult > 0 then
-        argLength = lenResult
-    end
-    
-    if argLength > 0 then
-        success, firstArg = pcall(function() return arg[0] end)
-        if not success or firstArg == nil then
-            success, firstArg = pcall(function() return arg[1] end)
-            if not success or firstArg == nil then
-                return
-            end
-        end
+local function UpdateArrestCache(playerName, npcId)
+    if npcId then
+        arrestedByCache[playerName] = npcId
+        wantedData[playerName] = wantedData[playerName] or {}
+        wantedData[playerName].arrestedBy = npcId
     else
-        -- Если массив пустой, пробуем получить данные напрямую из arg
-        if type(arg) == "string" then
-            firstArg = arg
-        elseif type(arg) == "table" then
-            -- Пробуем получить первое значение из таблицы
-            for _, v in pairs(arg) do
-                firstArg = v
-                break
-            end
-        end
-        if firstArg == nil then
-            return
+        arrestedByCache[playerName] = nil
+        if wantedData[playerName] then
+            wantedData[playerName].arrestedBy = nil
         end
     end
-    
-    local dataStr = tostring(firstArg)
-    local data = ParseSimpleJson(dataStr)
-    if not data or not data.npcId then return end
-    
-    if data.npcId == GetNPCId() and self:IsOwner() then return end
-    
-    local myName = GetLocalPlayerName()
-    
-    if eventName == EVT_SYNC_STATE then
-        if data.state then state = data.state end
-        if data.isArrestedLocal ~= nil then isArrestedLocal = data.isArrestedLocal end
-        if data.arrestedPlayerName then arrestedPlayerName = data.arrestedPlayerName end
-        if data.attackCount then attackCount = data.attackCount end
-        if data.adminProvoked ~= nil then adminProvoked = data.adminProvoked end
-        if data.isEscorting ~= nil then isEscorting = data.isEscorting end
-        if data.hasReachedStay ~= nil then hasReachedStay = data.hasReachedStay end
-        if data.isPlayerSeated ~= nil then isPlayerSeated = data.isPlayerSeated end
-        
-    elseif eventName == EVT_SYNC_POS then
-        -- 🔧 ИСПРАВЛЕНО: tonumber() для всех координат
-        if data.x and data.y and data.z then
-            local x = tonumber(data.x)
-            local y = tonumber(data.y)
-            local z = tonumber(data.z)
-            if x and y and z then
-                transform.position = unity.Vector3(x, y, z)
-            end
-        end
-        if data.rotY then
-            local rotY = tonumber(data.rotY)
-            if rotY then
-                local eul = transform.eulerAngles
-                transform.eulerAngles = unity.Vector3(eul.x, rotY, eul.z)
-            end
-        end
-        
-    elseif eventName == EVT_SYNC_WANTED then
-        if data.targetPlayer and data.targetPlayer == myName then
-            wantedData[myName] = wantedData[myName] or {}
-            local wd = wantedData[myName]
-            if data.star1 ~= nil then wd.star1 = data.star1 end
-            if data.star2 ~= nil then wd.star2 = data.star2 end
-            if data.star3 ~= nil then wd.star3 = data.star3 end
-            if data.pursuitTimer then wd.pursuitTimer = tonumber(data.pursuitTimer) or 0 end
-            if data.arrestedBy then wd.arrestedBy = data.arrestedBy end
-            WriteWantedCache()
-        elseif data.targetPlayer then
-            wantedData[data.targetPlayer] = wantedData[data.targetPlayer] or {}
-            local wd = wantedData[data.targetPlayer]
-            if data.star1 ~= nil then wd.star1 = data.star1 end
-            if data.star2 ~= nil then wd.star2 = data.star2 end
-            if data.pursuitTimer then wd.pursuitTimer = tonumber(data.pursuitTimer) or 0 end
-        end
-        
-    elseif eventName == EVT_SYNC_ARREST then
-        if data.targetPlayer == myName and data.isArrested ~= nil then
-            if data.isArrested then
-                if not isArrestedLocal and state ~= "Escorting" then
-                    if alertPlayed then
-                        alertPlayed = false
-                        delayedSoundPlayed = false
-                        detectionTimer = 0
-                        attackCount = 0
-                    end
-                    if wantedData[myName] then
-                        wantedData[myName].arrestedBy = data.arrestedByNpc
-                    end
-                end
-            else
-                if wantedData[myName] then
-                    wantedData[myName].arrestedBy = nil
-                end
-            end
-        end
-        
-    elseif eventName == EVT_SYNC_DOG then
-        if data.dogActive ~= nil and dogObject ~= nil then
-            dogIsActive = data.dogActive
-            dogObject:SetActive(dogIsActive)
-            if data.dogPos and dogIsActive then
-                -- 🔧 ИСПРАВЛЕНО: tonumber() для координат собаки
-                local x = tonumber(data.dogPos.x)
-                local y = tonumber(data.dogPos.y)
-                local z = tonumber(data.dogPos.z)
-                if x and y and z then
-                    dogObject.transform.position = unity.Vector3(x, y, z)
-                end
-            end
-        end
-        
-    elseif eventName == EVT_SYNC_CAR then
-        if policeCar ~= nil and data.carActive ~= nil then
-            policeCar:SetActive(data.carActive)
-            if data.carPos then
-                -- 🔧 ИСПРАВЛЕНО: tonumber() для координат машины
-                local x = tonumber(data.carPos.x)
-                local y = tonumber(data.carPos.y)
-                local z = tonumber(data.carPos.z)
-                if x and y and z then
-                    policeCar.transform.position = unity.Vector3(x, y, z)
-                end
-            end
-            if data.carRot then
-                -- 🔧 ИСПРАВЛЕНО: tonumber() для вращения машины
-                local x = tonumber(data.carRot.x)
-                local y = tonumber(data.carRot.y)
-                local z = tonumber(data.carRot.z)
-                if x and y and z then
-                    policeCar.transform.eulerAngles = unity.Vector3(x, y, z)
-                end
-            end
-        end
-        
-    elseif eventName == EVT_SYNC_ANIM then
-        if data.anim and animation then
-            animation:Play(data.anim)
-        end
-    end
+    WriteArrestCache()
 end
 
--- === ЛОГИКА РОЗЫСКА ===
+-- === ЛОГИКА РОЗЫСКА (без кэша звёзд, только память) ===
 local function GetPlayerWanted(playerName)
     return wantedData[playerName] or {star1=false, star2=false, star3=false, pursuitTimer=0}
 end
@@ -527,18 +233,15 @@ local function ValidateWantedLevel(playerName)
         wd.star3 = false
         needsUpdate = true
     end
-
+    
     if needsUpdate then
-        WriteWantedCache()
-        BroadcastWantedForPlayer(playerName)
+        wantedData[playerName] = wd
     end
 end
 
 local function UpdatePlayerWanted(playerName, field, value)
     wantedData[playerName] = wantedData[playerName] or {}
     wantedData[playerName][field] = value
-    WriteWantedCache()
-    BroadcastWantedForPlayer(playerName)
 end
 
 local function RecalculateThirdStar(playerName)
@@ -551,8 +254,6 @@ local function RecalculateThirdStar(playerName)
     local shouldStar3 = activePursuits >= MIN_PLAYERS_FOR_THIRD_STAR
     if wantedData[playerName] and wantedData[playerName].star3 ~= shouldStar3 then
         wantedData[playerName].star3 = shouldStar3
-        WriteWantedCache()
-        BroadcastWantedForPlayer(playerName)
     end
 end
 
@@ -597,7 +298,6 @@ function Start()
     waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
     PlayAnim(ANIM_IDLE)
 
-    -- === Инициализация собаки ===
     local dogSpawnObj = transform:Find("DogSpawn")
     if dogSpawnObj ~= nil then
         local dogTransform = dogSpawnObj:Find("dog")
@@ -614,7 +314,6 @@ function Start()
         end
     end
 
-    -- === Инициализация машины ===
     local polCarChild = transform:Find("PolicayCar")
     if polCarChild ~= nil then
         policeCar = polCarChild.gameObject
@@ -633,32 +332,21 @@ function Start()
         end
     end
 
-    -- === Загрузка текстур ===
     if ARREST_IMAGE_URL and ARREST_IMAGE_URL ~= "" then
         CS.UnityEngine.Debug.Log("[NPCGermanPolice2] Загрузка картинки ареста: " .. ARREST_IMAGE_URL)
         textureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(ARREST_IMAGE_URL)
         textureRequest:SendWebRequest()
-    else
-        CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] ARREST_IMAGE_URL не задан!")
     end
 
     if STAR_ICON_URL and STAR_ICON_URL ~= "" then
         CS.UnityEngine.Debug.Log("[NPCGermanPolice2] Загрузка иконки звезды: " .. STAR_ICON_URL)
         starTextureRequest = CS.UnityEngine.Networking.UnityWebRequestTexture.GetTexture(STAR_ICON_URL)
         starTextureRequest:SendWebRequest()
-    else
-        CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] STAR_ICON_URL не задан!")
     end
 
-    -- === Инициализация кэша ===
-    ReadWantedCache()
+    ReadArrestCache()
     local myName = GetLocalPlayerName()
     ValidateWantedLevel(myName)
-
-    BroadcastState()
-    BroadcastPosition(true)
-    BroadcastCar(policeCar and policeCar.activeSelf, policeCar and policeCar.transform.position, policeCar and policeCar.transform.eulerAngles)
-    BroadcastDog(dogIsActive, dogObject and dogObject.transform.position)
 end
 
 function OnDestroy()
@@ -670,17 +358,15 @@ function OnDestroy()
     if policeCar ~= nil then
         unity.Object.Destroy(policeCar)
     end
-    if arrestedPlayerName and wantedData[arrestedPlayerName] then
-        wantedData[arrestedPlayerName].arrestedBy = nil
-        WriteWantedCache()
-        BroadcastArrest(arrestedPlayerName, false, nil)
+    if arrestedPlayerName then
+        UpdateArrestCache(arrestedPlayerName, nil)
     end
 end
 
 function OnInteract()
     if Player.IsAdmin then
         adminProvoked = true
-        BroadcastState()
+        CS.UnityEngine.Debug.Log("[NPCGermanPolice2] 👮 Admin " .. Player.Name .. " provoked NPC")
     end
 end
 
@@ -691,10 +377,12 @@ function Update()
     local playerPos = Player.Position
     local distToPlayer = unity.Vector3.Distance(transform.position, playerPos)
 
-    -- === Загрузка текстур ===
     if textureRequest and textureRequest.isDone then
         if not textureRequest.isNetworkError and not textureRequest.isHttpError then
             arrestTexture = CS.UnityEngine.Networking.DownloadHandlerTexture.GetContent(textureRequest)
+            if arrestTexture and arrestTexture.width > 0 then
+                CS.UnityEngine.Debug.Log("[NPCGermanPolice2] ✅ Arrest texture loaded: " .. arrestTexture.width .. "x" .. arrestTexture.height)
+            end
         end
         textureRequest:Dispose()
         textureRequest = nil
@@ -702,67 +390,37 @@ function Update()
     if starTextureRequest and starTextureRequest.isDone then
         if not starTextureRequest.isNetworkError and not starTextureRequest.isHttpError then
             starTexture = CS.UnityEngine.Networking.DownloadHandlerTexture.GetContent(starTextureRequest)
+            if starTexture and starTexture.width > 0 then
+                CS.UnityEngine.Debug.Log("[NPCGermanPolice2] ✅ Star icon loaded: " .. starTexture.width .. "x" .. starTexture.height)
+            end
         end
         starTextureRequest:Dispose()
         starTextureRequest = nil
     end
 
-    -- === Таймеры синхронизации ===
-    posSyncTimer = posSyncTimer + dt
-    if posSyncTimer >= POS_SYNC_INTERVAL then
-        posSyncTimer = 0
-        BroadcastPosition()
-    end
-    stateSyncTimer = stateSyncTimer + dt
-    if stateSyncTimer >= STATE_SYNC_INTERVAL then
-        stateSyncTimer = 0
-        local curStateKey = state .. "|".. tostring(isArrestedLocal) .. "|".. tostring(attackCount)
-        if curStateKey ~= lastSentState then
-            lastSentState = curStateKey
-            BroadcastState()
-        end
-    end
-    wantedSyncTimer = wantedSyncTimer + dt
-    if wantedSyncTimer >= WANTED_SYNC_INTERVAL and wantedData[myName] then
-        wantedSyncTimer = 0
-        BroadcastWantedForPlayer(myName)
-        RecalculateThirdStar(myName)
-    end
-
-    -- === Локальный кэш файла ===
     fileReadTimer = fileReadTimer + dt
     if fileReadTimer >= FILE_READ_INTERVAL then
         fileReadTimer = 0
-        ReadWantedCache()
-        ValidateWantedLevel(myName)
-        WriteWantedCache()
+        ReadArrestCache()
     end
 
     ValidateWantedLevel(myName)
 
-    -- === Админ-управление ===
     if Player.IsAdmin then
         if unity.Input.GetKeyDown(unity.KeyCode.Alpha0) then
             wantedData[myName] = wantedData[myName] or {}
             wantedData[myName].star1 = not (wantedData[myName].star1 or false)
-            WriteWantedCache()
-            BroadcastWantedForPlayer(myName)
         end
         if unity.Input.GetKeyDown(unity.KeyCode.Minus) then
             wantedData[myName] = wantedData[myName] or {}
             wantedData[myName].star2 = not (wantedData[myName].star2 or false)
-            WriteWantedCache()
-            BroadcastWantedForPlayer(myName)
         end
         if unity.Input.GetKeyDown(unity.KeyCode.Equals) then
             wantedData[myName] = wantedData[myName] or {}
             wantedData[myName].star3 = not (wantedData[myName].star3 or false)
-            WriteWantedCache()
-            BroadcastWantedForPlayer(myName)
         end
     end
 
-    -- === Проверка: арестован ли игрок ДРУГИМ NPC ===
     local wd = wantedData[myName] or {}
     local arrestedByOther = wd.arrestedBy and wd.arrestedBy ~= GetNPCId() and not isArrestedLocal
 
@@ -770,7 +428,6 @@ function Update()
         if state ~= "Idle" and state ~= "Wander" then
             state = "Idle"
             PlayAnim(ANIM_IDLE)
-            BroadcastAnim(ANIM_IDLE)
             alertPlayed = false
             delayedSoundPlayed = false
             detectionTimer = 0
@@ -779,11 +436,10 @@ function Update()
             if wd then wd.pursuitTimer = 0 end
             targetPos = nil
             waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
-            BroadcastState()
+            CS.UnityEngine.Debug.Log("[NPCGermanPolice2] 🛑 Player " .. myName .. " arrested by " .. wd.arrestedBy .. " — returning to patrol")
         end
     end
 
-    -- === ЛОГИКА СОБАКИ ===
     if dogIsActive and dogObject ~= nil then
         local dogPos = dogObject.transform.position
         if arrestedByOther or isArrestedLocal then
@@ -817,7 +473,6 @@ function Update()
         end
     end
 
-    -- === ЛОГИКА АРЕСТА ===
     if isArrestedLocal then
         if arrestTimer > 0 then
             arrestTimer = arrestTimer - dt
@@ -832,11 +487,7 @@ function Update()
                 policeCar.transform.rotation = transform.rotation
                 carSpawned = true
             end
-
-            if policeCar ~= nil then
-                policeCar:SetActive(true)
-                BroadcastCar(true, policeCar.transform.position, policeCar.transform.eulerAngles)
-            end
+            if policeCar ~= nil then policeCar:SetActive(true) end
             isEscorting = true
             state = "Escorting"
             hasReachedStay = false
@@ -844,8 +495,6 @@ function Update()
             isPlayerLocked = false
             isSittingTimerActive = false
             PlayAnim(ANIM_RUN)
-            BroadcastState()
-            BroadcastAnim(ANIM_RUN)
         end
         if stayPoint ~= nil and not hasReachedStay then
             local toStay = stayPoint.position - transform.position
@@ -855,7 +504,6 @@ function Update()
             else
                 hasReachedStay = true
                 PlayAnim(ANIM_IDLE)
-                BroadcastAnim(ANIM_IDLE)
             end
         end
         if hasReachedStay then
@@ -872,7 +520,6 @@ function Update()
                         Chat:AddMessage(Player.Name .. " помещён в полицейскую машину.", "[00FF00]")
                     end
                     PlayAnim(ANIM_IDLE)
-                    BroadcastAnim(ANIM_IDLE)
                 end
             end
         end
@@ -896,10 +543,17 @@ function Update()
         return
     end
 
-    -- === ЛОГИКА АГГРО ===
+    -- === 🔧 ЛОГИКА АГГРО И АТАКИ ===
     if not arrestedByOther then
-        local shouldAggro = distToPlayer <= CHASE_RADIUS and ((not Player.IsAdmin) or adminProvoked)
-        local wd = wantedData[myName] or {}
+        local isInRadius = distToPlayer <= CHASE_RADIUS
+        local isNormalPlayer = not Player.IsAdmin
+        local isProvokedAdmin = Player.IsAdmin and adminProvoked
+        
+        if isInRadius and (isNormalPlayer or isProvokedAdmin) and not wd.star1 then
+            UpdatePlayerWanted(myName, "star1", true)
+        end
+        
+        local shouldAggro = isInRadius and (isNormalPlayer or isProvokedAdmin)
 
         if shouldAggro then
             if not alertPlayed then
@@ -921,9 +575,6 @@ function Update()
                 end
             end
 
-            if not wd.star1 then
-                UpdatePlayerWanted(myName, "star1", true)
-            end
             wd.pursuitTimer = (wd.pursuitTimer or 0) + dt
             UpdatePlayerWanted(myName, "pursuitTimer", wd.pursuitTimer)
 
@@ -938,53 +589,66 @@ function Update()
                     dogLastSoundTime = 0
                     if dogAnimation then dogAnimation:Play(DOG_ANIM_RUN) end
                     if dogAudioSource then dogAudioSource:Play() end
-                    BroadcastDog(true, dogObject.transform.position)
                 end
             end
 
             RecalculateThirdStar(myName)
 
+            if distToPlayer <= ATTACK_DIST then
+                local canAttack = false
+                if isNormalPlayer then
+                    canAttack = true
+                elseif isProvokedAdmin then
+                    canAttack = true
+                end
+                
+                if canAttack then
+                    if state ~= "Attacking" then
+                        state = "Attacking"
+                        attackTimer = ATTACK_COOLDOWN
+                        PlayAnim(ANIM_ATTACK)
+                        CS.UnityEngine.Debug.Log("[NPCGermanPolice2] ⚔️ Attack started: " .. Player.Name)
+                    end
+                end
+            else
+                if state == "Attacking" then
+                    state = "Chase"
+                    PlayAnim(ANIM_RUN)
+                end
+                if state ~= "Chase" then
+                    state = "Chase"
+                    PlayAnim(ANIM_RUN)
+                end
+                MoveTo(playerPos, CHASE_SPEED, dt)
+            end
+            
             if state == "Attacking" then
                 attackTimer = attackTimer - dt
                 if attackTimer <= 0 then
+                    if ATTACK_DAMAGE > 0 then
+                        Player:TakeDamage(ATTACK_DAMAGE)
+                    end
+                    if attackAudio then attackAudio:Play() end
+                    
                     attackCount = attackCount + 1
+                    CS.UnityEngine.Debug.Log("[NPCGermanPolice2] ⚔️ Hit #" .. attackCount .. " on " .. Player.Name)
+                    
                     if attackCount >= MAX_ATTACKS then
                         isArrestedLocal = true
                         arrestTimer = ARREST_DELAY
                         arrestPos = playerPos
                         arrestedPlayerName = myName
                         Chat:AddMessage(Player.Name .. " был арестован!", "[FF0000]")
-                        UpdatePlayerWanted(myName, "arrestedBy", GetNPCId())
-                        BroadcastArrest(myName, true, GetNPCId())
-                        BroadcastState()
+                        UpdateArrestCache(myName, GetNPCId())
                         return
                     end
+                    
                     state = "Chase"
                     PlayAnim(ANIM_RUN)
-                    BroadcastState()
-                    BroadcastAnim(ANIM_RUN)
                 end
                 return
             end
-
-            if distToPlayer <= ATTACK_DIST then
-                if state ~= "Attacking" then
-                    state = "Attacking"
-                    attackTimer = ATTACK_COOLDOWN
-                    PlayAnim(ANIM_ATTACK)
-                    BroadcastAnim(ANIM_ATTACK)
-                    Player:TakeDamage(ATTACK_DAMAGE)
-                    if attackAudio then attackAudio:Play() end
-                    BroadcastState()
-                end
-            else
-                if state ~= "Chase" then
-                    state = "Chase"
-                    PlayAnim(ANIM_RUN)
-                    BroadcastAnim(ANIM_RUN)
-                end
-                MoveTo(playerPos, CHASE_SPEED, dt)
-            end
+            
             return
         else
             if alertPlayed then
@@ -1006,8 +670,6 @@ function Update()
     if state == "Chase" or state == "Attacking" then
         state = "Idle"
         PlayAnim(ANIM_IDLE)
-        BroadcastState()
-        BroadcastAnim(ANIM_IDLE)
         waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
     end
 
@@ -1017,7 +679,6 @@ function Update()
             state = "Wander"
             targetPos = GetRandomPoint()
             PlayAnim(ANIM_RUN)
-            BroadcastAnim(ANIM_RUN)
         end
     elseif state == "Wander" then
         if targetPos == nil then
@@ -1029,7 +690,6 @@ function Update()
                 state = "Idle"
                 waitTimer = RandRange(WAIT_MIN, WAIT_MAX)
                 PlayAnim(ANIM_IDLE)
-                BroadcastAnim(ANIM_IDLE)
             else
                 MoveTo(targetPos, WALK_SPEED, dt)
             end
@@ -1038,56 +698,29 @@ function Update()
 end
 
 function OnGUI()
-    -- === Отображение картинки ареста ===
     if isArrestedLocal then
         if arrestTexture == nil then
-            CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] OnGUI: arrestTexture is nil, cannot draw")
-        elseif arrestTexture.width == 0 or arrestTexture.height == 0 then
-            CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] OnGUI: arrestTexture has invalid size")
-        else
-            local sw = unity.Screen.width
-            local sh = unity.Screen.height
-            local rect = unity.Rect(sw - 220, sh - 220, 200, 200)
-            unity.GUI.DrawTexture(rect, arrestTexture)
-            -- Однократный лог при успешной отрисовке (опционально, можно закомментировать)
-            -- CS.UnityEngine.Debug.Log("[NPCGermanPolice2] 🎨 Drew arrest texture")
+            CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] OnGUI: arrestTexture is nil")
+        elseif arrestTexture.width > 0 then
+            local sw, sh = unity.Screen.width, unity.Screen.height
+            unity.GUI.DrawTexture(unity.Rect(sw - 220, sh - 220, 200, 200), arrestTexture)
         end
     end
 
-    -- === Отображение звёзд розыска ===
-    if starTexture == nil then
-        -- Логируем только один раз, чтобы не спамить консоль
-        if not _starTextureWarned then
-            CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] OnGUI: starTexture is nil, cannot draw stars")
-            _starTextureWarned = true
-        end
-    elseif starTexture.width == 0 or starTexture.height == 0 then
-        if not _starTextureWarned then
-            CS.UnityEngine.Debug.LogWarning("[NPCGermanPolice2] OnGUI: starTexture has invalid size")
-            _starTextureWarned = true
-        end
-    else
+    if starTexture and starTexture.width > 0 then
         local myName = GetLocalPlayerName()
         local wd = wantedData[myName] or {star1=false, star2=false, star3=false}
         local sw = unity.Screen.width
-        local iconSize = 40
-        local margin = 10
-        local spacing = 5
+        local iconSize, margin, spacing = 40, 10, 5
         local rightMostX = sw - margin - iconSize
         local startY = margin
 
         for i = 3, 1, -1 do
-            local isActive = false
-            if i == 1 then isActive = wd.star1
-            elseif i == 2 then isActive = wd.star2
-            elseif i == 3 then isActive = wd.star3 end
-
+            local isActive = (i == 1 and wd.star1) or (i == 2 and wd.star2) or (i == 3 and wd.star3)
             local offset = (3 - i) * (iconSize + spacing)
             local x = rightMostX - offset
-            local rect = unity.Rect(x, startY, iconSize, iconSize)
-
             unity.GUI.color = isActive and unity.Color(1,1,1,1) or unity.Color(0.5,0.5,0.5,0.7)
-            unity.GUI.DrawTexture(rect, starTexture)
+            unity.GUI.DrawTexture(unity.Rect(x, startY, iconSize, iconSize), starTexture)
         end
         unity.GUI.color = unity.Color(1,1,1,1)
     end
